@@ -14,10 +14,11 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
     <style>
+        html, body { width: 100%; height: 100%; }
         body { margin: 0; overflow: hidden; background-color: #111; color: white; font-family: sans-serif; touch-action: none; }
         .video-container {
-            position: absolute;
-            top: 0; left: 0; width: 100vw; height: 100dvh;
+            position: fixed;
+            inset: 0;
             overflow: hidden;
             background-color: #000;
         }
@@ -28,13 +29,19 @@
             left: 0;
             width: 100%;
             height: 100%;
-            object-fit: cover; 
             transform: scaleX(-1);
             display: block;
             margin: 0;
             padding: 0;
             border: none;
             pointer-events: none; 
+        }
+        video {
+            object-fit: cover;
+            opacity: 0;
+        }
+        canvas {
+            object-fit: fill;
         }
         .overlay {
             position: absolute;
@@ -76,6 +83,7 @@
     <div class="video-container">
         <!-- iOS Fix: webkit-playsinline e disablePictureInPicture per forzare il background mode -->
         <video id="webcam" autoplay playsinline webkit-playsinline muted disablePictureInPicture controlslist="nodownload nofullscreen noremoteplayback" x-webkit-airplay="deny" disableremoteplayback></video>
+        <canvas id="bg-canvas"></canvas>
         <canvas id="three-canvas"></canvas>
         <canvas id="output-canvas"></canvas>
         
@@ -138,15 +146,23 @@
             cabFilter.frequency.value = 3500;
 
             distGain = audioCtx.createGain();
-            distGain.gain.value = 0.05; 
+            distGain.gain.value = 0.22; 
             
             distortionNode.connect(cabFilter);
             cabFilter.connect(distGain);
             distGain.connect(masterCompressor);
         }
 
+        function ensureAudioReady() {
+            if (!audioCtx) return;
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume().catch(() => {});
+            }
+        }
+
         function playNote(freq) {
             if (!audioCtx) return;
+            ensureAudioReady();
             
             const osc = audioCtx.createOscillator();
             const gainNode = audioCtx.createGain();
@@ -156,11 +172,21 @@
                 osc.connect(gainNode);
                 gainNode.connect(distortionNode);
                 
+                // Small dry blend keeps electric mode audible on all devices.
+                const dryBlend = audioCtx.createGain();
+                dryBlend.gain.value = 0.12;
+                gainNode.connect(dryBlend);
+                dryBlend.connect(masterCompressor);
+                
                 osc.frequency.value = freq;
                 osc.start();
-                gainNode.gain.setValueAtTime(0.6, audioCtx.currentTime);
+                gainNode.gain.setValueAtTime(0.8, audioCtx.currentTime);
                 gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 1.0);
                 osc.stop(audioCtx.currentTime + 1.0);
+                osc.onended = () => {
+                    try { dryBlend.disconnect(); } catch (e) {}
+                    try { gainNode.disconnect(); } catch (e) {}
+                };
             } else {
                 osc.type = 'triangle';
                 osc.connect(gainNode);
@@ -171,11 +197,16 @@
                 gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
                 gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.5);
                 osc.stop(audioCtx.currentTime + 1.5);
+                osc.onended = () => {
+                    try { gainNode.disconnect(); } catch (e) {}
+                };
             }
         }
 
         // --- MediaPipe & Logic Setup ---
         const videoElement = document.getElementById('webcam');
+        const bgCanvasElement = document.getElementById('bg-canvas');
+        const bgCanvasCtx = bgCanvasElement.getContext('2d');
         const canvasElement = document.getElementById('output-canvas');
         const canvasCtx = canvasElement.getContext('2d');
         const startBtn = document.getElementById('start-btn');
@@ -207,12 +238,12 @@
 
         // --- 3D AR Variables (Three.js) ---
         let scene, camera, renderer;
-        let guitarGroup, occluderGroup;
-        let occluders = []; 
+        let guitarGroup;
         let fallbackGuitar, rockGuitar; 
         let acousticNeckAnchor, rockNeckAnchor; 
         let chordSprite, chordCtx, chordTexture; 
         let lastChordName = "";
+        const guitarShaderTimeUniforms = [];
 
         // Mechanics variables
         let bodyAnchor = { x: null, y: null, z: null }; 
@@ -224,11 +255,63 @@
         let lastNeckAngleY = 0;
         let desiredNeckLength = 3.5;
         let bodyLostTimer = null; 
+        const SHOULDER_SCALE_MULT = 2.9;
+        const MIN_GUITAR_SCALE = 0.55;
+        const MAX_GUITAR_SCALE = 2.4;
+        const GUITAR_Y_OFFSET_FACTOR = 0.34;
+        const GUITAR_Y_LIFT = 0.04;
+        const ANCHOR_LERP = 0.28;
+        const SCALE_LERP = 0.24;
+
+        const videoContainer = document.querySelector('.video-container');
+
+        function getLayoutMetrics() {
+            const dstW = Math.max(1, canvasElement.width || videoContainer.clientWidth || window.innerWidth);
+            const dstH = Math.max(1, canvasElement.height || videoContainer.clientHeight || window.innerHeight);
+            const srcW = Math.max(1, videoElement.videoWidth || dstW);
+            const srcH = Math.max(1, videoElement.videoHeight || dstH);
+            const scale = Math.max(dstW / srcW, dstH / srcH);
+            const sourceCropW = dstW / scale;
+            const sourceCropH = dstH / scale;
+            const sourceCropX = (srcW - sourceCropW) / 2;
+            const sourceCropY = (srcH - sourceCropH) / 2;
+            return { srcW, srcH, dstW, dstH, scale, sourceCropX, sourceCropY, sourceCropW, sourceCropH };
+        }
+
+        function projectVideoPoint(normX, normY) {
+            const m = getLayoutMetrics();
+            const x = ((normX * m.srcW) - m.sourceCropX) * (m.dstW / m.sourceCropW);
+            const y = ((normY * m.srcH) - m.sourceCropY) * (m.dstH / m.sourceCropH);
+            return {
+                x,
+                y,
+                nx: x / m.dstW,
+                ny: y / m.dstH
+            };
+        }
+
+        function drawVideoBackground() {
+            const m = getLayoutMetrics();
+            bgCanvasCtx.clearRect(0, 0, m.dstW, m.dstH);
+            bgCanvasCtx.drawImage(
+                videoElement,
+                m.sourceCropX,
+                m.sourceCropY,
+                m.sourceCropW,
+                m.sourceCropH,
+                0,
+                0,
+                m.dstW,
+                m.dstH
+            );
+        }
 
         function syncCanvases() {
-            const vw = videoElement.videoWidth;
-            const vh = videoElement.videoHeight;
-            if (vw > 0 && vh > 0 && (canvasElement.width !== vw || canvasElement.height !== vh)) {
+            const vw = Math.max(1, videoContainer.clientWidth || window.innerWidth);
+            const vh = Math.max(1, videoContainer.clientHeight || window.innerHeight);
+            if (canvasElement.width !== vw || canvasElement.height !== vh) {
+                bgCanvasElement.width = vw;
+                bgCanvasElement.height = vh;
                 canvasElement.width = vw;
                 canvasElement.height = vh;
                 
@@ -243,6 +326,65 @@
                     renderer.setSize(vw, vh, false); 
                 }
             }
+        }
+
+        videoElement.addEventListener('loadedmetadata', syncCanvases);
+
+        function applyVintageGuitarShader(root, tintHex = 0xe5d4bf) {
+            const tint = new THREE.Color(tintHex);
+            const markMaterial = (material) => {
+                if (!material || material.userData?.vintageShaderApplied) return;
+                if (!(material.isMeshStandardMaterial || material.isMeshPhysicalMaterial)) return;
+
+                material.roughness = Math.min(1, (material.roughness ?? 0.6) + 0.2);
+                material.metalness = Math.max(0, (material.metalness ?? 0.2) - 0.12);
+
+                material.onBeforeCompile = (shader) => {
+                    shader.uniforms.uTime = { value: 0 };
+                    shader.uniforms.uTint = { value: tint };
+                    shader.uniforms.uGrainStrength = { value: 0.04 };
+
+                    shader.fragmentShader = shader.fragmentShader
+                        .replace(
+                            '#include <common>',
+                            `#include <common>
+uniform float uTime;
+uniform vec3 uTint;
+uniform float uGrainStrength;
+float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 345.45));
+    p += dot(p, p + 34.345);
+    return fract(p.x * p.y);
+}`
+                        )
+                        .replace(
+                            '#include <dithering_fragment>',
+                            `float grain = (hash21(gl_FragCoord.xy + uTime * 45.0) - 0.5) * uGrainStrength;
+float lum = dot(gl_FragColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+vec3 graded = mix(vec3(lum), gl_FragColor.rgb, 0.78);
+graded = mix(graded, graded * uTint, 0.16);
+float rim = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 2.0);
+graded += rim * 0.08;
+gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
+#include <dithering_fragment>`
+                        );
+
+                    guitarShaderTimeUniforms.push(shader.uniforms.uTime);
+                };
+
+                material.userData = material.userData || {};
+                material.userData.vintageShaderApplied = true;
+                material.needsUpdate = true;
+            };
+
+            root.traverse((node) => {
+                if (!node.isMesh || !node.material) return;
+                if (Array.isArray(node.material)) {
+                    node.material.forEach(markMaterial);
+                } else {
+                    markMaterial(node.material);
+                }
+            });
         }
 
         function initThreeJS() {
@@ -274,19 +416,6 @@
             chordSprite.position.set(-0.3, 1.0, 0.6); 
             chordSprite.scale.set(1.5, 0.75, 1);
             chordSprite.renderOrder = 999;
-
-            occluderGroup = new THREE.Group();
-            occluderGroup.renderOrder = -1; 
-            scene.add(occluderGroup);
-            
-            const occMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true });
-            const occGeo = new THREE.SphereGeometry(1, 12, 12);
-            for(let i=0; i<60; i++) {
-                let mesh = new THREE.Mesh(occGeo, occMat);
-                mesh.visible = false;
-                occluderGroup.add(mesh);
-                occluders.push(mesh);
-            }
 
             guitarGroup = new THREE.Group();
             guitarGroup.visible = false; 
@@ -384,6 +513,7 @@
                 bStrMesh.position.set(-0.9, (i - 2) * 0.05, 0.28);
                 fallbackGuitar.add(bStrMesh);
             }
+            applyVintageGuitarShader(fallbackGuitar, 0xe7d9c8);
             guitarGroup.add(fallbackGuitar);
 
             // --- 3. Rock V-Shape Procedural Guitar ---
@@ -479,6 +609,7 @@
 
             rockGuitar.add(rockNeckAnchor);
             rockGuitar.visible = false; 
+            applyVintageGuitarShader(rockGuitar, 0xe4ccd0);
             guitarGroup.add(rockGuitar);
 
             guitarGroup.add(chordSprite);
@@ -488,10 +619,15 @@
 
         function animateThreeJS() {
             requestAnimationFrame(animateThreeJS);
+            const now = performance.now() * 0.001;
+            for (const uTime of guitarShaderTimeUniforms) {
+                uTime.value = now;
+            }
             
             if (guitarGroup && guitarGroup.visible) {
                 const currentBridge = bodyAnchor.x !== null ? bodyAnchor : { x: 0.5, y: 0.6, z: 0 };
-                const bridge3D = mapTo3D(currentBridge.x, currentBridge.y, currentBridge.z);
+                const currentBridgeProjected = projectVideoPoint(currentBridge.x, currentBridge.y);
+                const bridge3D = mapTo3D(currentBridgeProjected.nx, currentBridgeProjected.ny, currentBridge.z);
                 
                 guitarGroup.scale.set(bodyScale, bodyScale, bodyScale);
                 guitarGroup.position.set(bridge3D.x, bridge3D.y, bridge3D.z);
@@ -533,6 +669,10 @@
             lastChordName = chordName;
             
             chordCtx.clearRect(0, 0, 256, 128);
+            chordCtx.save();
+            // Pre-flip text so it appears readable after global mirrored rendering.
+            chordCtx.translate(256, 0);
+            chordCtx.scale(-1, 1);
             chordCtx.fillStyle = '#ffffff';
             chordCtx.font = 'bold 80px sans-serif';
             chordCtx.textAlign = 'center';
@@ -541,24 +681,16 @@
             chordCtx.shadowColor = isRockMode ? '#cc0000' : '#000000';
             chordCtx.shadowBlur = 10;
             chordCtx.fillText(chordName, 128, 64);
+            chordCtx.restore();
             
             chordTexture.needsUpdate = true;
         }
 
-        function updateOccluders(landmarks, startIdx, count, scaleMult, offsetX = 0) {
-            if(!landmarks) return;
-            for(let i=0; i<count; i++) {
-                if(startIdx + i >= occluders.length) break;
-                const pt = landmarks[i];
-                const p3D = mapTo3D(pt.x + offsetX, pt.y, (pt.z || 0) - 0.1); 
-                occluders[startIdx + i].position.set(p3D.x, p3D.y, p3D.z);
-                occluders[startIdx + i].scale.setScalar(bodyScale * scaleMult);
-                occluders[startIdx + i].visible = true;
-            }
-        }
-
         function onResults(results) {
             syncCanvases(); 
+            if (videoElement.readyState >= 2) {
+                drawVideoBackground();
+            }
             canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
 
@@ -574,17 +706,16 @@
                     strumHandMarks = results.multiHandLandmarks[1];
                 }
 
-                updateOccluders(fretHandMarks, 0, 21, 0.25);
-                updateOccluders(strumHandMarks, 21, 21, 0.25);
-
                 let strumHand = strumHandMarks[9];
                 let fretHand = fretHandMarks[9];
 
-                const pBridge = { x: currentBridge.x * canvasElement.width, y: currentBridge.y * canvasElement.height };
-                const pFret = { x: fretHand.x * canvasElement.width, y: fretHand.y * canvasElement.height };
+                const projectedBridge = projectVideoPoint(currentBridge.x, currentBridge.y);
+                const projectedFret = projectVideoPoint(fretHand.x, fretHand.y);
+                const pBridge = { x: projectedBridge.x, y: projectedBridge.y };
+                const pFret = { x: projectedFret.x, y: projectedFret.y };
 
-                const dx = fretHand.x - currentBridge.x;
-                const dy = fretHand.y - currentBridge.y;
+                const dx = projectedFret.nx - projectedBridge.nx;
+                const dy = projectedFret.ny - projectedBridge.ny;
                 const distance = Math.sqrt(dx * dx + dy * dy);
 
                 const minDist = 0.1;
@@ -604,7 +735,8 @@
 
                 fingers.forEach((finger, idx) => {
                     const tip = strumHandMarks[finger.tip];
-                    const pTip = { x: tip.x * canvasElement.width, y: tip.y * canvasElement.height };
+                    const projectedTip = projectVideoPoint(tip.x, tip.y);
+                    const pTip = { x: projectedTip.x, y: projectedTip.y };
                     
                     let dist = 0;
                     if (L2 === 0) {
@@ -645,8 +777,8 @@
                     strumVisualTimer = setTimeout(() => { isStrummingVisual = false; }, 150);
                 }
 
-                const bridge3D = mapTo3D(currentBridge.x, currentBridge.y, currentBridge.z);
-                const fret3D = mapTo3D(fretHand.x, fretHand.y, fretHand.z || 0);
+                const bridge3D = mapTo3D(projectedBridge.nx, projectedBridge.ny, currentBridge.z);
+                const fret3D = mapTo3D(projectedFret.nx, projectedFret.ny, fretHand.z || 0);
 
                 const dx3D = fret3D.x - bridge3D.x;
                 const dy3D = fret3D.y - bridge3D.y;
@@ -659,31 +791,10 @@
                 const localDist = dist3D / Math.max(0.1, bodyScale);
                 desiredNeckLength = (localDist - (acousticNeckAnchor ? acousticNeckAnchor.position.x : 0.6)) + 2.0;
 
-                const drawPoint = (point, color, radius = 12) => {
-                    canvasCtx.beginPath();
-                    canvasCtx.arc(point.x, point.y, radius, 0, 2 * Math.PI);
-                    canvasCtx.fillStyle = color;
-                    canvasCtx.fill();
-                    canvasCtx.lineWidth = 3;
-                    canvasCtx.strokeStyle = 'white';
-                    canvasCtx.stroke();
-                };
-
-                drawPoint(pBridge, '#6b7280', 8); 
-                drawPoint(pFret, '#3b82f6');      
-                
-                fingers.forEach((finger, idx) => {
-                    const tip = strumHandMarks[finger.tip];
-                    const pTip = { x: tip.x * canvasElement.width, y: tip.y * canvasElement.height };
-                    const color = fingerStates[idx] ? '#10b981' : '#ec4899'; 
-                    drawPoint(pTip, color, 8);
-                });
+                // Hand landmark dots disabled by request.
 
             } else {
                 fingerStates = [false, false, false, false, false]; 
-                for(let i=0; i<42; i++) {
-                    if(occluders[i]) occluders[i].visible = false;
-                }
             }
 
             canvasCtx.restore();
@@ -733,11 +844,12 @@
                 const shoulderDy = lShoulder.y - rShoulder.y;
                 const shoulderDist = Math.hypot(shoulderDx, shoulderDy);
                 
-                let targetScale = shoulderDist * 2.5; 
-                // Capped limits to prevent giant guitars on mobile
-                targetScale = Math.max(0.6, Math.min(targetScale, 2.0));
+                // Scale follows shoulder span (distance from camera) with balanced caps.
+                let targetScale = shoulderDist * SHOULDER_SCALE_MULT; 
+                targetScale = Math.max(MIN_GUITAR_SCALE, Math.min(targetScale, MAX_GUITAR_SCALE));
                 
-                const targetY = midY + (0.45 * targetScale); 
+                // Slightly higher placement than before.
+                const targetY = (midY + (GUITAR_Y_OFFSET_FACTOR * targetScale)) - GUITAR_Y_LIFT; 
 
                 if (bodyAnchor.x === null) {
                     bodyAnchor.x = midX;
@@ -745,33 +857,11 @@
                     bodyAnchor.z = midZ;
                     bodyScale = targetScale;
                 } else {
-                    bodyAnchor.x = bodyAnchor.x * 0.8 + midX * 0.2;
-                    bodyAnchor.y = bodyAnchor.y * 0.8 + targetY * 0.2;
-                    bodyAnchor.z = (bodyAnchor.z || 0) * 0.8 + midZ * 0.2;
-                    bodyScale = bodyScale * 0.9 + targetScale * 0.1;
+                    bodyAnchor.x = bodyAnchor.x * (1 - ANCHOR_LERP) + midX * ANCHOR_LERP;
+                    bodyAnchor.y = bodyAnchor.y * (1 - ANCHOR_LERP) + targetY * ANCHOR_LERP;
+                    bodyAnchor.z = (bodyAnchor.z || 0) * (1 - ANCHOR_LERP) + midZ * ANCHOR_LERP;
+                    bodyScale = bodyScale * (1 - SCALE_LERP) + targetScale * SCALE_LERP;
                 }
-
-                const interpolateArm = (startIdx, elbow, wrist) => {
-                    if(!elbow || !wrist) return;
-                    let steps = 9;
-                    for(let i=0; i<steps; i++) {
-                        let t = i / (steps-1);
-                        let pt = {
-                            x: elbow.x * (1-t) + wrist.x * t,
-                            y: elbow.y * (1-t) + wrist.y * t,
-                            z: elbow.z * (1-t) + wrist.z * t
-                        };
-                        const p3D = mapTo3D(pt.x, pt.y, (pt.z || 0) - 0.1);
-                        if(occluders[startIdx + i]) {
-                            occluders[startIdx + i].position.set(p3D.x, p3D.y, p3D.z);
-                            occluders[startIdx + i].scale.setScalar(bodyScale * 0.45); 
-                            occluders[startIdx + i].visible = true;
-                        }
-                    }
-                };
-                
-                interpolateArm(42, results.poseLandmarks[13], results.poseLandmarks[15]); 
-                interpolateArm(51, results.poseLandmarks[14], results.poseLandmarks[16]); 
 
             } else {
                 if (!bodyLostTimer) {
@@ -791,6 +881,8 @@
             hardenInlineVideo(videoElement);
 
             const webcamCamera = new Camera(videoElement, {
+                width: Math.max(640, window.innerWidth),
+                height: Math.max(480, window.innerHeight),
                 onFrame: async () => {
                     await pose.send({image: videoElement});
                     await hands.send({image: videoElement});
@@ -799,7 +891,11 @@
             webcamCamera.start()
                 .then(() => videoElement.play())
                 .catch((err) => console.error('Camera start failed:', err));
+
+            syncCanvases();
         });
+
+        window.addEventListener('resize', syncCanvases);
 
         const toggleModeBtn = document.getElementById('toggle-mode-btn');
         toggleModeBtn.addEventListener('click', () => {
@@ -814,6 +910,7 @@
             lastChordName = ""; 
             updateChordText(CHORDS[activeChordIndex].name);
 
+            
             if (fallbackGuitar) fallbackGuitar.visible = !isRockMode;
             if (rockGuitar) rockGuitar.visible = isRockMode;
         });
