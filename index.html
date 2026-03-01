@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Air Band - Virtual Guitar</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- MediaPipe Libraries (Rimosso camera_utils perché usiamo un loop personalizzato anti-freeze) -->
+    <!-- MediaPipe Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
@@ -20,9 +21,8 @@
             overflow: hidden;
             background-color: #000;
         }
-
-        /* FIX iOS: regole video separate per evitare fullscreen/player nativo. */
-        video {
+        /* CRITICAL FIX FOR iOS: pointer-events: none impedisce al tocco di attivare il player nativo */
+        video, canvas {
             position: absolute;
             top: 0;
             left: 0;
@@ -34,26 +34,8 @@
             margin: 0;
             padding: 0;
             border: none;
-            z-index: 1;
-            pointer-events: none; /* FIX iOS: Rende il video "intoccabile", bloccando l'apertura del player nativo */
-        }
-        
-        canvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100dvh;
-            object-fit: cover; 
-            transform: scaleX(-1);
-            display: block;
-            margin: 0;
-            padding: 0;
-            border: none;
             pointer-events: none; 
-            z-index: 2;
         }
-
         .overlay {
             position: absolute;
             top: 0; left: 0; width: 100%; height: 100%;
@@ -71,8 +53,9 @@
             align-items: center;
             pointer-events: auto;
         }
+        /* Bottone Toggle */
         #toggle-mode-btn {
-            pointer-events: auto; 
+            pointer-events: auto; /* Consente al bottone di essere cliccato */
         }
     </style>
 </head>
@@ -91,11 +74,12 @@
     </div>
 
     <div class="video-container">
-        <!-- iOS Fix: Aggiunto webkit-playsinline per compatibilità massima con tutti gli iPhone/iPad -->
-        <video id="webcam" autoplay playsinline webkit-playsinline muted></video>
+        <!-- iOS Fix: webkit-playsinline e disablePictureInPicture per forzare il background mode -->
+        <video id="webcam" autoplay playsinline webkit-playsinline muted disablePictureInPicture controlslist="nodownload nofullscreen noremoteplayback" x-webkit-airplay="deny" disableremoteplayback></video>
         <canvas id="three-canvas"></canvas>
         <canvas id="output-canvas"></canvas>
         
+        <!-- Pulsante stile minimale in alto a destra -->
         <button id="toggle-mode-btn" class="absolute top-6 right-6 w-14 h-14 flex items-center justify-center bg-black/40 hover:bg-black/70 backdrop-blur-md rounded-full text-white text-3xl border border-white/20 transition-all hidden z-50 shadow-lg" title="Cambia Chitarra">
             🎸
         </button>
@@ -109,6 +93,7 @@
         let masterCompressor;
         let isRockMode = false;
         
+        // C Major Scale Chords (Frequencies in Hz) - Added 5th note for Thumb
         const CHORDS = [
             { name: "C",  notes: [130.81, 164.81, 196.00, 261.63, 329.63] },
             { name: "Dm", notes: [146.83, 174.61, 220.00, 293.66, 349.23] },
@@ -195,6 +180,27 @@
         const canvasCtx = canvasElement.getContext('2d');
         const startBtn = document.getElementById('start-btn');
         const startScreen = document.getElementById('start-screen');
+
+        function hardenInlineVideo(video) {
+            // Safari/iOS needs both attributes and runtime properties to reliably avoid fullscreen player.
+            video.setAttribute('playsinline', '');
+            video.setAttribute('webkit-playsinline', '');
+            video.setAttribute('muted', '');
+            video.setAttribute('autoplay', '');
+            video.setAttribute('disablepictureinpicture', '');
+            video.setAttribute('disableremoteplayback', '');
+            video.setAttribute('x-webkit-airplay', 'deny');
+            video.setAttribute('controlslist', 'nodownload nofullscreen noremoteplayback');
+
+            video.playsInline = true;
+            video.muted = true;
+            video.autoplay = true;
+            video.controls = false;
+            video.disablePictureInPicture = true;
+            try { video.disableRemotePlayback = true; } catch (e) {}
+        }
+
+        hardenInlineVideo(videoElement);
 
         let isStrummingVisual = false;
         let strumVisualTimer = null;
@@ -721,12 +727,14 @@
                 const midY = (lShoulder.y + rShoulder.y) / 2;
                 const midZ = (lShoulder.z + rShoulder.z) / 2;
 
+                // CORREZIONE SCALA PER DISPOSITIVI MOBILI IN VERTICALE
                 const aspect = (canvasElement.width / canvasElement.height) || 1;
                 const shoulderDx = (lShoulder.x - rShoulder.x) * aspect; 
                 const shoulderDy = lShoulder.y - rShoulder.y;
                 const shoulderDist = Math.hypot(shoulderDx, shoulderDy);
                 
                 let targetScale = shoulderDist * 2.5; 
+                // Capped limits to prevent giant guitars on mobile
                 targetScale = Math.max(0.6, Math.min(targetScale, 2.0));
                 
                 const targetY = midY + (0.45 * targetScale); 
@@ -773,59 +781,24 @@
                 }
             }
         });
-        // FIX iOS: Utilizzo di raw getUserMedia e loop manuale invece di funzioni forzate
-        startBtn.addEventListener('click', async () => {
+
+        startBtn.addEventListener('click', () => {
             initAudio(); 
             initThreeJS(); 
             startScreen.style.display = 'none';
             document.getElementById('toggle-mode-btn').classList.remove('hidden');
 
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }
-                });
-                
-                // Hardening iOS inline playback: keep camera stream inside the page.
-                videoElement.playsInline = true;
-                videoElement.autoplay = true;
-                videoElement.muted = true;
-                videoElement.controls = false;
-                videoElement.setAttribute('playsinline', '');
-                videoElement.setAttribute('webkit-playsinline', '');
+            hardenInlineVideo(videoElement);
 
-                videoElement.srcObject = stream;
-                
-                // FIX iOS: Forza esplicitamente la riproduzione del video dopo aver collegato lo stream, 
-                // in modo da bypassare l'icona Play al centro dello schermo.
-                videoElement.play().catch(e => console.warn("Auto-play iOS fallback:", e));
-                
-                // Attendiamo che il video sia caricato per avviare il processo,
-                // sfruttando l'attributo HTML `autoplay` nativo senza usare .play() esplicitamente.
-                videoElement.addEventListener("loadeddata", () => {
-                    let lastVideoTime = -1;
-                    let isProcessing = false; // <-- SEMAFORO ANTI-FREEZE CRUCIALE PER IPHONE
-
-                    const processFrame = async () => {
-                        if (!isProcessing && videoElement.currentTime !== lastVideoTime) {
-                            isProcessing = true; // Blocca il thread finché l'AI non ha finito
-                            lastVideoTime = videoElement.currentTime;
-                            try {
-                                await pose.send({image: videoElement});
-                                await hands.send({image: videoElement});
-                            } catch (e) {
-                                console.error("AI Error:", e);
-                            } finally {
-                                isProcessing = false; // Sblocca per il prossimo frame
-                            }
-                        }
-                        requestAnimationFrame(processFrame);
-                    };
-                    processFrame();
-                });
-
-            } catch (error) {
-                console.error("Errore accesso fotocamera:", error);
-            }
+            const webcamCamera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await pose.send({image: videoElement});
+                    await hands.send({image: videoElement});
+                }
+            });
+            webcamCamera.start()
+                .then(() => videoElement.play())
+                .catch((err) => console.error('Camera start failed:', err));
         });
 
         const toggleModeBtn = document.getElementById('toggle-mode-btn');
