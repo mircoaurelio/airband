@@ -250,6 +250,9 @@
         let bodyScale = 1.0; 
         let fingerStates = [false, false, false, false, false]; 
         let fingerLastPluckTime = [0, 0, 0, 0, 0]; 
+        let fingerHitVisualUntil = [0, 0, 0, 0, 0];
+        const FINGER_HIT_COLORS = ['#ff5c7a', '#ffa94d', '#ffd43b', '#69db7c', '#4dabf7'];
+        const FINGER_HIT_MS = 120;
 
         let lastNeckAngleZ = -0.5;
         let lastNeckAngleY = 0;
@@ -732,11 +735,13 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
 
                 let pluckedThisFrame = false;
                 const L2 = Math.pow(pFret.x - pBridge.x, 2) + Math.pow(pFret.y - pBridge.y, 2);
+                const tipPoints = [null, null, null, null, null];
 
                 fingers.forEach((finger, idx) => {
                     const tip = strumHandMarks[finger.tip];
                     const projectedTip = projectVideoPoint(tip.x, tip.y);
                     const pTip = { x: projectedTip.x, y: projectedTip.y };
+                    tipPoints[idx] = pTip;
                     
                     let dist = 0;
                     if (L2 === 0) {
@@ -765,6 +770,7 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
                         if (now - fingerLastPluckTime[idx] > 100) { 
                             playNote(currentChord.notes[4 - idx]);
                             fingerLastPluckTime[idx] = now;
+                            fingerHitVisualUntil[idx] = now + FINGER_HIT_MS;
                             pluckedThisFrame = true;
                         }
                     }
@@ -791,10 +797,26 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
                 const localDist = dist3D / Math.max(0.1, bodyScale);
                 desiredNeckLength = (localDist - (acousticNeckAnchor ? acousticNeckAnchor.position.x : 0.6)) + 2.0;
 
-                // Hand landmark dots disabled by request.
+                const now = Date.now();
+                const drawPoint = (point, color, radius = 8) => {
+                    if (!point) return;
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(point.x, point.y, radius, 0, 2 * Math.PI);
+                    canvasCtx.fillStyle = color;
+                    canvasCtx.fill();
+                    canvasCtx.lineWidth = 2;
+                    canvasCtx.strokeStyle = '#ffffff';
+                    canvasCtx.stroke();
+                };
+                for (let i = 0; i < tipPoints.length; i++) {
+                    if (now < fingerHitVisualUntil[i]) {
+                        drawPoint(tipPoints[i], FINGER_HIT_COLORS[i], 9);
+                    }
+                }
 
             } else {
                 fingerStates = [false, false, false, false, false]; 
+                fingerHitVisualUntil = [0, 0, 0, 0, 0];
             }
 
             canvasCtx.restore();
