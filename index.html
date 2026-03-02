@@ -306,7 +306,7 @@
                 const biteBand = audioCtx.createBiquadFilter();
                 const outGain = audioCtx.createGain();
 
-                oscMain.type = 'square';
+                oscMain.type = 'triangle';
                 oscOct.type = 'sawtooth';
                 oscSub.type = 'triangle';
                 oscMain.frequency.setValueAtTime(freq, now);
@@ -315,10 +315,12 @@
                 oscMain.detune.value = 5;
                 oscOct.detune.value = -7;
                 oscSub.detune.value = 2;
+                oscMain.frequency.setValueAtTime(freq * 1.008, now);
+                oscMain.frequency.exponentialRampToValueAtTime(freq, now + 0.022);
 
-                mainGain.gain.value = 0.52;
-                octGain.gain.value = 0.18;
-                subGain.gain.value = 0.14;
+                mainGain.gain.value = 0.48;
+                octGain.gain.value = 0.16;
+                subGain.gain.value = 0.12;
                 preShapeGain.gain.value = 1.52;
 
                 toneGate.type = 'highpass';
@@ -341,9 +343,10 @@
                 outGain.connect(reverseDistortionNode);
 
                 outGain.gain.setValueAtTime(0.0001, now);
-                outGain.gain.linearRampToValueAtTime(0.9, now + 0.0028);
-                outGain.gain.exponentialRampToValueAtTime(0.2, now + 0.12);
-                outGain.gain.exponentialRampToValueAtTime(0.012, now + 0.96);
+                outGain.gain.linearRampToValueAtTime(0.82, now + 0.003);
+                outGain.gain.exponentialRampToValueAtTime(0.26, now + 0.16);
+                outGain.gain.exponentialRampToValueAtTime(0.035, now + 1.25);
+                outGain.gain.exponentialRampToValueAtTime(0.0008, now + 2.45);
 
                 const dryBlend = audioCtx.createGain();
                 dryBlend.gain.value = 0.08;
@@ -374,9 +377,9 @@
                 oscOct.start(now);
                 oscSub.start(now);
                 noiseSource.start(now);
-                oscMain.stop(now + 1.0);
-                oscOct.stop(now + 0.84);
-                oscSub.stop(now + 1.04);
+                oscMain.stop(now + 2.5);
+                oscOct.stop(now + 2.2);
+                oscSub.stop(now + 2.6);
                 noiseSource.stop(now + 0.023);
 
                 oscMain.onended = () => {
