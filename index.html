@@ -982,7 +982,7 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
                     new THREE.MeshStandardMaterial({ color: 0x1b1b1b, roughness: 0.42 })
                 );
                 tiePoint.rotation.x = Math.PI / 2;
-                tiePoint.position.set(-1.99, (i - 2.5) * 0.11, 0.27);
+                tiePoint.position.set(-1.99, (i - 2.5) * VISUAL_STRING_SPACING, 0.2);
                 fallbackGuitar.add(tiePoint);
             }
 
@@ -1043,7 +1043,7 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
             const stringMat = new THREE.MeshBasicMaterial({ color: 0xeeeeee });
             for(let i=0; i<6; i++) {
                 const stringGeom = new THREE.BoxGeometry(FIXED_NECK_LENGTH, 0.01, 0.01);
-                stringGeom.translate(FIXED_NECK_LENGTH / 2, 0, 0.12);
+                stringGeom.translate(FIXED_NECK_LENGTH / 2, 0, 0.2);
                 const stringMesh = new THREE.Mesh(stringGeom, stringMat);
                 stringMesh.position.y = (i - 2.5) * VISUAL_STRING_SPACING;
                 acousticNeckAnchor.add(stringMesh);
@@ -1054,7 +1054,7 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
                 const bStrGeom = new THREE.BoxGeometry(2.62, 0.01, 0.01);
                 bStrGeom.translate(1.31, 0, 0);
                 const bStrMesh = new THREE.Mesh(bStrGeom, stringMat);
-                bStrMesh.position.set(-1.92, (i - 2.5) * VISUAL_STRING_SPACING, 0.12);
+                bStrMesh.position.set(-1.99, (i - 2.5) * VISUAL_STRING_SPACING, 0.2);
                 fallbackGuitar.add(bStrMesh);
             }
             applyVintageGuitarShader(fallbackGuitar, 0xe7d9c8);
@@ -1621,10 +1621,21 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
 
                 const lShoulder = results.poseLandmarks[11];
                 const rShoulder = results.poseLandmarks[12];
-                
-                const midX = (lShoulder.x * 0.15) + (rShoulder.x * 0.85);
-                const midY = (lShoulder.y + rShoulder.y) / 2;
-                const midZ = (lShoulder.z + rShoulder.z) / 2;
+                const lHipUpper = results.poseLandmarks[23];
+                const rHipUpper = results.poseLandmarks[24];
+
+                // Anchor on upper torso (closer to chest/shoulders).
+                const shoulderMidX = (lShoulder.x + rShoulder.x) / 2;
+                const shoulderMidY = (lShoulder.y + rShoulder.y) / 2;
+                const shoulderMidZ = (lShoulder.z + rShoulder.z) / 2;
+                const hipsVisible = lHipUpper && rHipUpper &&
+                    (lHipUpper.visibility == null || lHipUpper.visibility > 0.3) &&
+                    (rHipUpper.visibility == null || rHipUpper.visibility > 0.3);
+                const hipMidY = hipsVisible ? ((lHipUpper.y + rHipUpper.y) / 2) : shoulderMidY;
+
+                const midX = shoulderMidX;
+                const midY = (shoulderMidY * 0.86) + (hipMidY * 0.14);
+                const midZ = shoulderMidZ;
 
                 // CORREZIONE SCALA PER DISPOSITIVI MOBILI IN VERTICALE
                 const aspect = (canvasElement.width / canvasElement.height) || 1;
