@@ -79,9 +79,15 @@
             <strong>Polso destro (pose):</strong> Attraversa la linea corde per strummare.<br>
             <strong>Direzione:</strong> Alto→basso = downstroke, basso→alto = upstroke inverso.
         </p>
-        <button id="start-btn" class="px-8 py-4 bg-purple-600 hover:bg-purple-500 text-white rounded-full font-bold text-xl transition shadow-lg shadow-purple-500/50">
-            Inizia a Suonare
-        </button>
+        <div class="w-[min(520px,82vw)]">
+            <div class="flex items-center justify-between mb-2 text-sm text-gray-300">
+                <span id="init-status">Inizializzazione...</span>
+                <span id="init-progress-value">0%</span>
+            </div>
+            <div class="h-3 w-full rounded-full bg-white/10 border border-white/15 overflow-hidden">
+                <div id="init-progress-fill" class="h-full rounded-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300 ease-out" style="width: 0%;"></div>
+            </div>
+        </div>
     </div>
 
     <div class="video-container">
@@ -291,103 +297,159 @@
                 const now = audioCtx.currentTime;
                 const oscMain = audioCtx.createOscillator();
                 const oscOct = audioCtx.createOscillator();
+                const oscSub = audioCtx.createOscillator();
                 const mainGain = audioCtx.createGain();
                 const octGain = audioCtx.createGain();
+                const subGain = audioCtx.createGain();
                 const preShapeGain = audioCtx.createGain();
                 const toneGate = audioCtx.createBiquadFilter();
+                const biteBand = audioCtx.createBiquadFilter();
                 const outGain = audioCtx.createGain();
 
                 oscMain.type = 'square';
                 oscOct.type = 'sawtooth';
+                oscSub.type = 'triangle';
                 oscMain.frequency.setValueAtTime(freq, now);
                 oscOct.frequency.setValueAtTime(freq * 2, now);
+                oscSub.frequency.setValueAtTime(freq * 0.5, now);
                 oscMain.detune.value = 5;
                 oscOct.detune.value = -7;
+                oscSub.detune.value = 2;
 
                 mainGain.gain.value = 0.52;
                 octGain.gain.value = 0.18;
-                preShapeGain.gain.value = 1.6;
+                subGain.gain.value = 0.14;
+                preShapeGain.gain.value = 1.52;
 
                 toneGate.type = 'highpass';
-                toneGate.frequency.setValueAtTime(170, now);
-                toneGate.Q.value = 0.7;
+                toneGate.frequency.setValueAtTime(150, now);
+                toneGate.Q.value = 0.72;
+                biteBand.type = 'peaking';
+                biteBand.frequency.setValueAtTime(1800, now);
+                biteBand.Q.value = 1.1;
+                biteBand.gain.value = 2.8;
 
                 oscMain.connect(mainGain);
                 oscOct.connect(octGain);
+                oscSub.connect(subGain);
                 mainGain.connect(preShapeGain);
                 octGain.connect(preShapeGain);
+                subGain.connect(preShapeGain);
                 preShapeGain.connect(toneGate);
-                toneGate.connect(outGain);
+                toneGate.connect(biteBand);
+                biteBand.connect(outGain);
                 outGain.connect(reverseDistortionNode);
 
                 outGain.gain.setValueAtTime(0.0001, now);
-                outGain.gain.linearRampToValueAtTime(0.92, now + 0.003);
-                outGain.gain.exponentialRampToValueAtTime(0.17, now + 0.11);
-                outGain.gain.exponentialRampToValueAtTime(0.01, now + 0.85);
+                outGain.gain.linearRampToValueAtTime(0.9, now + 0.0028);
+                outGain.gain.exponentialRampToValueAtTime(0.2, now + 0.12);
+                outGain.gain.exponentialRampToValueAtTime(0.012, now + 0.96);
 
                 const dryBlend = audioCtx.createGain();
-                dryBlend.gain.value = 0.06;
-                preShapeGain.connect(dryBlend);
+                dryBlend.gain.value = 0.08;
+                biteBand.connect(dryBlend);
                 dryBlend.connect(masterCompressor);
+
+                // Short metallic pick/noise burst keeps attack definition.
+                const noiseBuffer = audioCtx.createBuffer(1, Math.floor(audioCtx.sampleRate * 0.018), audioCtx.sampleRate);
+                const noiseData = noiseBuffer.getChannelData(0);
+                for (let i = 0; i < noiseData.length; i++) {
+                    noiseData[i] = (Math.random() * 2 - 1) * (1 - (i / noiseData.length));
+                }
+                const noiseSource = audioCtx.createBufferSource();
+                noiseSource.buffer = noiseBuffer;
+                const noiseFilter = audioCtx.createBiquadFilter();
+                noiseFilter.type = 'bandpass';
+                noiseFilter.frequency.value = 3300;
+                noiseFilter.Q.value = 1.4;
+                const noiseGain = audioCtx.createGain();
+                noiseGain.gain.setValueAtTime(0.0001, now);
+                noiseGain.gain.linearRampToValueAtTime(0.13, now + 0.0018);
+                noiseGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.02);
+                noiseSource.connect(noiseFilter);
+                noiseFilter.connect(noiseGain);
+                noiseGain.connect(reverseDistortionNode);
 
                 oscMain.start(now);
                 oscOct.start(now);
-                oscMain.stop(now + 0.9);
-                oscOct.stop(now + 0.78);
+                oscSub.start(now);
+                noiseSource.start(now);
+                oscMain.stop(now + 1.0);
+                oscOct.stop(now + 0.84);
+                oscSub.stop(now + 1.04);
+                noiseSource.stop(now + 0.023);
 
                 oscMain.onended = () => {
                     try { dryBlend.disconnect(); } catch (e) {}
                     try { mainGain.disconnect(); } catch (e) {}
                     try { octGain.disconnect(); } catch (e) {}
+                    try { subGain.disconnect(); } catch (e) {}
                     try { preShapeGain.disconnect(); } catch (e) {}
                     try { toneGate.disconnect(); } catch (e) {}
+                    try { biteBand.disconnect(); } catch (e) {}
                     try { outGain.disconnect(); } catch (e) {}
+                    try { noiseGain.disconnect(); } catch (e) {}
+                    try { noiseFilter.disconnect(); } catch (e) {}
                 };
             } else if (isRockMode) {
                 const now = audioCtx.currentTime;
                 const oscA = audioCtx.createOscillator();
                 const oscB = audioCtx.createOscillator();
+                const oscLow = audioCtx.createOscillator();
                 const oscAGain = audioCtx.createGain();
                 const oscBGain = audioCtx.createGain();
+                const oscLowGain = audioCtx.createGain();
                 const preAmp = audioCtx.createGain();
                 const pickTone = audioCtx.createBiquadFilter();
+                const bodyTone = audioCtx.createBiquadFilter();
                 const pickAttackGain = audioCtx.createGain();
 
                 oscA.type = 'sawtooth';
                 oscB.type = 'square';
+                oscLow.type = 'triangle';
                 oscA.frequency.setValueAtTime(freq, now);
                 oscB.frequency.setValueAtTime(freq, now);
+                oscLow.frequency.setValueAtTime(freq * 0.5, now);
                 oscA.detune.value = -3;
                 oscB.detune.value = 4;
+                oscLow.detune.value = 2;
 
                 oscAGain.gain.value = 0.62;
                 oscBGain.gain.value = 0.24;
-                preAmp.gain.value = 1.35;
+                oscLowGain.gain.value = 0.14;
+                preAmp.gain.value = 1.32;
 
                 pickTone.type = 'lowpass';
                 pickTone.Q.value = 0.9;
-                pickTone.frequency.setValueAtTime(4700, now);
-                pickTone.frequency.exponentialRampToValueAtTime(2400, now + 0.11);
+                pickTone.frequency.setValueAtTime(5200, now);
+                pickTone.frequency.exponentialRampToValueAtTime(2500, now + 0.13);
+                bodyTone.type = 'peaking';
+                bodyTone.frequency.value = 420;
+                bodyTone.Q.value = 0.9;
+                bodyTone.gain.value = 2.0;
 
                 oscA.connect(oscAGain);
                 oscB.connect(oscBGain);
+                oscLow.connect(oscLowGain);
                 oscAGain.connect(preAmp);
                 oscBGain.connect(preAmp);
+                oscLowGain.connect(preAmp);
                 preAmp.connect(pickTone);
-                pickTone.connect(pickAttackGain);
+                pickTone.connect(bodyTone);
+                bodyTone.connect(pickAttackGain);
                 pickAttackGain.connect(distortionNode);
                 
                 // Small dry blend keeps electric mode audible on all devices.
                 const dryBlend = audioCtx.createGain();
-                dryBlend.gain.value = 0.09;
-                preAmp.connect(dryBlend);
+                dryBlend.gain.value = 0.1;
+                bodyTone.connect(dryBlend);
                 dryBlend.connect(masterCompressor);
 
                 // Sharp pick transient followed by controlled decay for electric feel.
                 pickAttackGain.gain.setValueAtTime(0.0001, now);
-                pickAttackGain.gain.linearRampToValueAtTime(0.95, now + 0.004);
-                pickAttackGain.gain.exponentialRampToValueAtTime(0.22, now + 0.13);
-                pickAttackGain.gain.exponentialRampToValueAtTime(0.01, now + 1.05);
+                pickAttackGain.gain.linearRampToValueAtTime(0.93, now + 0.0038);
+                pickAttackGain.gain.exponentialRampToValueAtTime(0.24, now + 0.15);
+                pickAttackGain.gain.exponentialRampToValueAtTime(0.012, now + 1.18);
 
                 // Add a very short noise click to emulate pick-on-string.
                 const noiseBuffer = audioCtx.createBuffer(1, Math.floor(audioCtx.sampleRate * 0.02), audioCtx.sampleRate);
@@ -411,18 +473,22 @@
 
                 oscA.start(now);
                 oscB.start(now);
+                oscLow.start(now);
                 noiseSource.start(now);
 
-                oscA.stop(now + 1.1);
-                oscB.stop(now + 0.95);
+                oscA.stop(now + 1.22);
+                oscB.stop(now + 1.02);
+                oscLow.stop(now + 1.28);
                 noiseSource.stop(now + 0.035);
 
                 oscA.onended = () => {
                     try { dryBlend.disconnect(); } catch (e) {}
                     try { oscAGain.disconnect(); } catch (e) {}
                     try { oscBGain.disconnect(); } catch (e) {}
+                    try { oscLowGain.disconnect(); } catch (e) {}
                     try { preAmp.disconnect(); } catch (e) {}
                     try { pickTone.disconnect(); } catch (e) {}
+                    try { bodyTone.disconnect(); } catch (e) {}
                     try { pickAttackGain.disconnect(); } catch (e) {}
                     try { noiseGain.disconnect(); } catch (e) {}
                     try { noiseFilter.disconnect(); } catch (e) {}
@@ -433,23 +499,36 @@
                 const bassHP = audioCtx.createBiquadFilter();
                 const bassLP = audioCtx.createBiquadFilter();
                 const bassBody = audioCtx.createBiquadFilter();
+                const bassFinger = audioCtx.createBiquadFilter();
+                const bassPunch = audioCtx.createBiquadFilter();
                 const bassGain = audioCtx.createGain();
 
                 bassHP.type = 'highpass';
-                bassHP.frequency.value = 35;
+                bassHP.frequency.value = 32;
                 bassHP.Q.value = 0.8;
                 bassLP.type = 'lowpass';
-                bassLP.frequency.value = 720;
-                bassLP.Q.value = 0.9;
+                bassLP.frequency.setValueAtTime(920, now);
+                bassLP.frequency.exponentialRampToValueAtTime(560, now + 0.35);
+                bassLP.Q.value = 0.85;
                 bassBody.type = 'peaking';
-                bassBody.frequency.value = 120;
+                bassBody.frequency.value = 105;
                 bassBody.Q.value = 1.1;
-                bassBody.gain.value = 4.5;
+                bassBody.gain.value = 4.1;
+                bassFinger.type = 'peaking';
+                bassFinger.frequency.value = 720;
+                bassFinger.Q.value = 1.05;
+                bassFinger.gain.value = 2.2;
+                bassPunch.type = 'peaking';
+                bassPunch.frequency.value = 185;
+                bassPunch.Q.value = 0.95;
+                bassPunch.gain.value = 2.4;
 
                 bassGain.connect(bassHP);
                 bassHP.connect(bassLP);
                 bassLP.connect(bassBody);
-                bassBody.connect(masterCompressor);
+                bassBody.connect(bassPunch);
+                bassPunch.connect(bassFinger);
+                bassFinger.connect(masterCompressor);
 
                 const bassFund = audioCtx.createOscillator();
                 const bassHarm = audioCtx.createOscillator();
@@ -465,9 +544,9 @@
                 const fundGain = audioCtx.createGain();
                 const harmGain = audioCtx.createGain();
                 const subGain = audioCtx.createGain();
-                fundGain.gain.value = 0.72;
-                harmGain.gain.value = 0.11;
-                subGain.gain.value = 0.26;
+                fundGain.gain.value = 0.68;
+                harmGain.gain.value = 0.16;
+                subGain.gain.value = 0.24;
 
                 bassFund.connect(fundGain);
                 bassHarm.connect(harmGain);
@@ -477,16 +556,38 @@
                 subGain.connect(bassBus);
                 bassBus.connect(bassGain);
                 bassGain.gain.setValueAtTime(0.0001, now);
-                bassGain.gain.linearRampToValueAtTime(0.7, now + 0.01);
-                bassGain.gain.exponentialRampToValueAtTime(0.24, now + 0.2);
-                bassGain.gain.exponentialRampToValueAtTime(0.001, now + 1.25);
+                bassGain.gain.linearRampToValueAtTime(0.74, now + 0.009);
+                bassGain.gain.exponentialRampToValueAtTime(0.26, now + 0.23);
+                bassGain.gain.exponentialRampToValueAtTime(0.001, now + 1.42);
+
+                // Finger pluck transient for articulation on low notes.
+                const noiseBuffer = audioCtx.createBuffer(1, Math.floor(audioCtx.sampleRate * 0.04), audioCtx.sampleRate);
+                const noiseData = noiseBuffer.getChannelData(0);
+                for (let i = 0; i < noiseData.length; i++) {
+                    noiseData[i] = (Math.random() * 2 - 1) * (1 - (i / noiseData.length));
+                }
+                const noiseSource = audioCtx.createBufferSource();
+                noiseSource.buffer = noiseBuffer;
+                const noiseFilter = audioCtx.createBiquadFilter();
+                noiseFilter.type = 'bandpass';
+                noiseFilter.frequency.value = 1400;
+                noiseFilter.Q.value = 0.9;
+                const noiseGain = audioCtx.createGain();
+                noiseGain.gain.setValueAtTime(0.0001, now);
+                noiseGain.gain.linearRampToValueAtTime(0.07, now + 0.003);
+                noiseGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.055);
+                noiseSource.connect(noiseFilter);
+                noiseFilter.connect(noiseGain);
+                noiseGain.connect(bassBus);
 
                 bassFund.start(now);
                 bassHarm.start(now);
                 bassSub.start(now);
-                bassFund.stop(now + 1.3);
-                bassHarm.stop(now + 0.85);
-                bassSub.stop(now + 1.45);
+                noiseSource.start(now);
+                bassFund.stop(now + 1.45);
+                bassHarm.stop(now + 1.0);
+                bassSub.stop(now + 1.58);
+                noiseSource.stop(now + 0.06);
 
                 bassFund.onended = () => {
                     try { bassGain.disconnect(); } catch (e) {}
@@ -494,111 +595,175 @@
                     try { bassHP.disconnect(); } catch (e) {}
                     try { bassLP.disconnect(); } catch (e) {}
                     try { bassBody.disconnect(); } catch (e) {}
+                    try { bassFinger.disconnect(); } catch (e) {}
+                    try { bassPunch.disconnect(); } catch (e) {}
                     try { fundGain.disconnect(); } catch (e) {}
                     try { harmGain.disconnect(); } catch (e) {}
                     try { subGain.disconnect(); } catch (e) {}
+                    try { noiseGain.disconnect(); } catch (e) {}
+                    try { noiseFilter.disconnect(); } catch (e) {}
                 };
             } else {
                 const now = audioCtx.currentTime;
                 const noteBus = audioCtx.createGain();
                 const hp = audioCtx.createBiquadFilter();
-                const body = audioCtx.createBiquadFilter();
+                const bodyLow = audioCtx.createBiquadFilter();
+                const bodyTop = audioCtx.createBiquadFilter();
                 const lp = audioCtx.createBiquadFilter();
                 const panner = audioCtx.createStereoPanner();
                 const outputGain = audioCtx.createGain();
 
                 hp.type = 'highpass';
-                hp.frequency.value = 90;
-                hp.Q.value = 0.65;
+                hp.frequency.value = 78;
+                hp.Q.value = 0.7;
 
-                body.type = 'peaking';
-                body.frequency.value = Math.max(120, Math.min(420, freq * 1.15));
-                body.Q.value = 1.0;
-                body.gain.value = 4.2;
+                // Two resonances emulate classical body "air" and top plate.
+                bodyLow.type = 'peaking';
+                bodyLow.frequency.value = Math.max(105, Math.min(210, freq * 0.95));
+                bodyLow.Q.value = 1.15;
+                bodyLow.gain.value = 3.4;
+
+                bodyTop.type = 'peaking';
+                bodyTop.frequency.value = Math.max(310, Math.min(760, freq * 2.05));
+                bodyTop.Q.value = 1.2;
+                bodyTop.gain.value = 2.6;
 
                 lp.type = 'lowpass';
-                lp.Q.value = 0.9;
-                lp.frequency.setValueAtTime(4200, now);
-                lp.frequency.exponentialRampToValueAtTime(1900, now + 0.5);
+                lp.Q.value = 0.86;
+                lp.frequency.setValueAtTime(Math.min(5600, 3400 + (freq * 1.6)), now);
+                lp.frequency.exponentialRampToValueAtTime(Math.max(1500, 1050 + (freq * 1.7)), now + 0.65);
 
-                panner.pan.value = (Math.random() * 0.18) - 0.09;
+                panner.pan.value = (Math.random() * 0.24) - 0.12;
 
                 noteBus.connect(hp);
-                hp.connect(body);
-                body.connect(lp);
+                hp.connect(bodyLow);
+                bodyLow.connect(bodyTop);
+                bodyTop.connect(lp);
                 lp.connect(panner);
                 panner.connect(outputGain);
                 outputGain.connect(masterCompressor);
 
-                // Main string partials: warm body + brighter harmonics.
+                // Partial stack tuned for nylon-string timbre.
                 const fundamental = audioCtx.createOscillator();
                 const harmonic2 = audioCtx.createOscillator();
                 const harmonic3 = audioCtx.createOscillator();
+                const harmonic4 = audioCtx.createOscillator();
                 const stringGain = audioCtx.createGain();
+                const fundamentalGain = audioCtx.createGain();
+                const harmonic2Gain = audioCtx.createGain();
+                const harmonic3Gain = audioCtx.createGain();
+                const harmonic4Gain = audioCtx.createGain();
+                const detuneDrift = (Math.random() * 5.5) - 2.75;
 
                 fundamental.type = 'triangle';
                 harmonic2.type = 'sine';
                 harmonic3.type = 'triangle';
+                harmonic4.type = 'sine';
 
                 fundamental.frequency.setValueAtTime(freq, now);
-                harmonic2.frequency.setValueAtTime(freq * 2, now);
-                harmonic3.frequency.setValueAtTime(freq * 3.02, now);
-                harmonic2.detune.value = -4;
-                harmonic3.detune.value = 6;
+                harmonic2.frequency.setValueAtTime(freq * 2.002, now);
+                harmonic3.frequency.setValueAtTime(freq * 3.015, now);
+                harmonic4.frequency.setValueAtTime(freq * 4.035, now);
 
-                fundamental.connect(stringGain);
-                harmonic2.connect(stringGain);
-                harmonic3.connect(stringGain);
+                harmonic2.detune.value = detuneDrift - 4;
+                harmonic3.detune.value = detuneDrift + 7;
+                harmonic4.detune.value = detuneDrift + 3;
+
+                // Tiny pitch drop in first milliseconds gives a more natural pluck onset.
+                fundamental.frequency.setValueAtTime(freq * 1.005, now);
+                fundamental.frequency.exponentialRampToValueAtTime(freq, now + 0.018);
+
+                fundamentalGain.gain.value = 0.88;
+                harmonic2Gain.gain.value = 0.31;
+                harmonic3Gain.gain.value = 0.18;
+                harmonic4Gain.gain.value = 0.07;
+
+                fundamental.connect(fundamentalGain);
+                harmonic2.connect(harmonic2Gain);
+                harmonic3.connect(harmonic3Gain);
+                harmonic4.connect(harmonic4Gain);
+                fundamentalGain.connect(stringGain);
+                harmonic2Gain.connect(stringGain);
+                harmonic3Gain.connect(stringGain);
+                harmonic4Gain.connect(stringGain);
                 stringGain.connect(noteBus);
 
                 stringGain.gain.setValueAtTime(0.0001, now);
-                stringGain.gain.linearRampToValueAtTime(0.34, now + 0.006);
-                stringGain.gain.exponentialRampToValueAtTime(0.11, now + 0.16);
-                stringGain.gain.exponentialRampToValueAtTime(0.0009, now + 2.25);
+                stringGain.gain.linearRampToValueAtTime(0.37, now + 0.0055);
+                stringGain.gain.exponentialRampToValueAtTime(0.13, now + 0.14);
+                stringGain.gain.exponentialRampToValueAtTime(0.001, now + 2.55);
 
-                // Pick attack: a very short filtered noise burst makes plucks realistic.
-                const noiseBuffer = audioCtx.createBuffer(1, Math.floor(audioCtx.sampleRate * 0.035), audioCtx.sampleRate);
+                // Finger/nail transient split in two bands for more realistic attack.
+                const noiseBuffer = audioCtx.createBuffer(1, Math.floor(audioCtx.sampleRate * 0.05), audioCtx.sampleRate);
                 const noiseData = noiseBuffer.getChannelData(0);
                 for (let i = 0; i < noiseData.length; i++) {
-                    noiseData[i] = (Math.random() * 2 - 1) * (1 - (i / noiseData.length));
+                    const t = i / noiseData.length;
+                    noiseData[i] = (Math.random() * 2 - 1) * ((1 - t) * (1 - t));
                 }
-                const noiseSource = audioCtx.createBufferSource();
-                noiseSource.buffer = noiseBuffer;
-                const pickFilter = audioCtx.createBiquadFilter();
-                pickFilter.type = 'bandpass';
-                pickFilter.frequency.value = 3200;
-                pickFilter.Q.value = 1.1;
-                const pickGain = audioCtx.createGain();
-                pickGain.gain.setValueAtTime(0.0001, now);
-                pickGain.gain.linearRampToValueAtTime(0.19, now + 0.002);
-                pickGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.042);
-                noiseSource.connect(pickFilter);
-                pickFilter.connect(pickGain);
-                pickGain.connect(noteBus);
+
+                const fingerNoiseSource = audioCtx.createBufferSource();
+                fingerNoiseSource.buffer = noiseBuffer;
+                const fingerBand = audioCtx.createBiquadFilter();
+                fingerBand.type = 'bandpass';
+                fingerBand.frequency.value = 2100;
+                fingerBand.Q.value = 0.9;
+                const fingerGain = audioCtx.createGain();
+                fingerGain.gain.setValueAtTime(0.0001, now);
+                fingerGain.gain.linearRampToValueAtTime(0.16, now + 0.002);
+                fingerGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.065);
+
+                const nailNoiseSource = audioCtx.createBufferSource();
+                nailNoiseSource.buffer = noiseBuffer;
+                const nailBand = audioCtx.createBiquadFilter();
+                nailBand.type = 'highpass';
+                nailBand.frequency.value = 4200;
+                nailBand.Q.value = 0.8;
+                const nailGain = audioCtx.createGain();
+                nailGain.gain.setValueAtTime(0.0001, now);
+                nailGain.gain.linearRampToValueAtTime(0.085, now + 0.0015);
+                nailGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.028);
+
+                fingerNoiseSource.connect(fingerBand);
+                fingerBand.connect(fingerGain);
+                fingerGain.connect(noteBus);
+                nailNoiseSource.connect(nailBand);
+                nailBand.connect(nailGain);
+                nailGain.connect(noteBus);
 
                 outputGain.gain.setValueAtTime(1.0, now);
-                outputGain.gain.exponentialRampToValueAtTime(0.98, now + 0.4);
+                outputGain.gain.exponentialRampToValueAtTime(0.965, now + 0.5);
 
                 fundamental.start(now);
                 harmonic2.start(now);
                 harmonic3.start(now);
-                noiseSource.start(now);
+                harmonic4.start(now);
+                fingerNoiseSource.start(now);
+                nailNoiseSource.start(now);
 
-                fundamental.stop(now + 2.3);
-                harmonic2.stop(now + 1.8);
-                harmonic3.stop(now + 1.5);
-                noiseSource.stop(now + 0.05);
+                fundamental.stop(now + 2.6);
+                harmonic2.stop(now + 2.05);
+                harmonic3.stop(now + 1.75);
+                harmonic4.stop(now + 1.2);
+                fingerNoiseSource.stop(now + 0.07);
+                nailNoiseSource.stop(now + 0.035);
 
                 fundamental.onended = () => {
+                    try { fundamentalGain.disconnect(); } catch (e) {}
+                    try { harmonic2Gain.disconnect(); } catch (e) {}
+                    try { harmonic3Gain.disconnect(); } catch (e) {}
+                    try { harmonic4Gain.disconnect(); } catch (e) {}
                     try { stringGain.disconnect(); } catch (e) {}
                     try { noteBus.disconnect(); } catch (e) {}
                     try { hp.disconnect(); } catch (e) {}
-                    try { body.disconnect(); } catch (e) {}
+                    try { bodyLow.disconnect(); } catch (e) {}
+                    try { bodyTop.disconnect(); } catch (e) {}
                     try { lp.disconnect(); } catch (e) {}
                     try { panner.disconnect(); } catch (e) {}
                     try { outputGain.disconnect(); } catch (e) {}
-                    try { pickGain.disconnect(); } catch (e) {}
-                    try { pickFilter.disconnect(); } catch (e) {}
+                    try { fingerGain.disconnect(); } catch (e) {}
+                    try { fingerBand.disconnect(); } catch (e) {}
+                    try { nailGain.disconnect(); } catch (e) {}
+                    try { nailBand.disconnect(); } catch (e) {}
                 };
             }
         }
@@ -694,8 +859,10 @@
         const bgCanvasCtx = bgCanvasElement.getContext('2d');
         const canvasElement = document.getElementById('output-canvas');
         const canvasCtx = canvasElement.getContext('2d');
-        const startBtn = document.getElementById('start-btn');
         const startScreen = document.getElementById('start-screen');
+        const initStatusEl = document.getElementById('init-status');
+        const initProgressValueEl = document.getElementById('init-progress-value');
+        const initProgressFillEl = document.getElementById('init-progress-fill');
 
         function hardenInlineVideo(video) {
             // Safari/iOS needs both attributes and runtime properties to reliably avoid fullscreen player.
@@ -737,11 +904,14 @@
         let prevStringSides = [];
         let lastStringHitTimes = [];
         const STRING_NOTE_DEBOUNCE_MS = 55;
-        const STRING_TRACK_SPACING_FACTOR = 0.0165;
+        const STRING_TRACK_SPACING_FACTOR = 0.0215;
         const VISUAL_STRING_SPACING = 0.055;
-        const BASS_TRACK_SPACING_FACTOR = 0.032;
+        const BASS_TRACK_SPACING_FACTOR = 0.041;
         const BASS_VISUAL_STRING_SPACING = 0.14;
-        const STRING_SIDE_DEADZONE_FACTOR = 0.005;
+        const STRING_SIDE_DEADZONE_FACTOR = 0.0035;
+        const STRUM_POSE_VISIBILITY_THRESHOLD = 0.18;
+        const STRUM_PLAYABLE_T_MIN = -0.42;
+        const STRUM_PLAYABLE_T_MAX = 1.42;
         const SHOW_STRUM_GUIDE_LINE = false;
         const IS_RENDER_MIRRORED = true;
         const STRUM_POINT_LEFT_FACTOR = 0.07;
@@ -760,15 +930,25 @@
         let lastNeckAngleY = 0;
         let desiredNeckLength = BASE_NECK_LENGTH;
         let bodyLostTimer = null; 
-        const SHOULDER_SCALE_MULT = 3.15;
-        const MIN_GUITAR_SCALE = 0.62;
-        const MAX_GUITAR_SCALE = 2.7;
-        const GUITAR_Y_OFFSET_FACTOR = 0.34;
-        const GUITAR_Y_LIFT = 0.04;
+        const SHOULDER_SCALE_MULT = 3.45;
+        const MIN_GUITAR_SCALE = 0.72;
+        const MAX_GUITAR_SCALE = 2.95;
+        const GUITAR_Y_OFFSET_FACTOR = 0.27;
+        const GUITAR_Y_LIFT = 0.115;
         const ANCHOR_LERP = 0.28;
         const SCALE_LERP = 0.24;
+        const KNEE_HALO_DURATION_MS = 780;
+        const KNEE_HALO_MIN_RADIUS_FACTOR = 0.1;
+        const KNEE_HALO_MAX_RADIUS_FACTOR = 0.38;
+        let kneeHaloStartMs = 0;
+        let kneeHaloDirection = 0; // 1 = next, -1 = previous
 
         const videoContainer = document.querySelector('.video-container');
+
+        function triggerKneeHalo(direction) {
+            kneeHaloDirection = direction;
+            kneeHaloStartMs = Date.now();
+        }
 
         function getLayoutMetrics() {
             const dstW = Math.max(1, canvasElement.width || videoContainer.clientWidth || window.innerWidth);
@@ -1051,12 +1231,22 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
             fallbackGuitar.add(acousticNeckAnchor);
 
             for(let i=0; i<6; i++) {
-                const bStrGeom = new THREE.BoxGeometry(2.62, 0.01, 0.01);
-                bStrGeom.translate(1.31, 0, 0);
+                const bStrGeom = new THREE.BoxGeometry(1.96, 0.01, 0.01);
+                bStrGeom.translate(0.98, 0, 0);
                 const bStrMesh = new THREE.Mesh(bStrGeom, stringMat);
                 bStrMesh.position.set(-1.99, (i - 2.5) * VISUAL_STRING_SPACING, 0.2);
                 fallbackGuitar.add(bStrMesh);
             }
+
+            // Make classic body larger/wider without changing neck length (X axis).
+            const CLASSIC_BODY_BULK_Y = 1.22;
+            const CLASSIC_BODY_BULK_Z = 1.15;
+            fallbackGuitar.children.forEach((node) => {
+                if (node !== acousticNeckAnchor) {
+                    node.scale.y *= CLASSIC_BODY_BULK_Y;
+                    node.scale.z *= CLASSIC_BODY_BULK_Z;
+                }
+            });
             applyVintageGuitarShader(fallbackGuitar, 0xe7d9c8);
             guitarGroup.add(fallbackGuitar);
 
@@ -1397,11 +1587,14 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
 
             if (results.multiHandLandmarks && results.multiHandLandmarks.length >= 1) {
                 let fretHandMarks;
+                let strumHandMarks = null;
                 if (results.multiHandLandmarks.length >= 2) {
                     if (results.multiHandLandmarks[0][9].x < results.multiHandLandmarks[1][9].x) {
                         fretHandMarks = results.multiHandLandmarks[1];
+                        strumHandMarks = results.multiHandLandmarks[0];
                     } else {
                         fretHandMarks = results.multiHandLandmarks[0];
+                        strumHandMarks = results.multiHandLandmarks[1];
                     }
                 } else {
                     fretHandMarks = results.multiHandLandmarks[0];
@@ -1487,18 +1680,26 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
                 const poseStrumWrist = latestPoseLandmarks ? latestPoseLandmarks[16] : null;
                 const poseStrumIndex = latestPoseLandmarks ? latestPoseLandmarks[20] : null;
                 const poseStrumPinky = latestPoseLandmarks ? latestPoseLandmarks[18] : null;
-                const poseStrumVisible = !!poseStrumWrist && (poseStrumWrist.visibility == null || poseStrumWrist.visibility > 0.35);
+                const poseStrumVisible = !!poseStrumWrist && (poseStrumWrist.visibility == null || poseStrumWrist.visibility > STRUM_POSE_VISIBILITY_THRESHOLD);
+                const handStrumWrist = strumHandMarks ? strumHandMarks[0] : null;
+                const handStrumIndex = strumHandMarks ? strumHandMarks[8] : null;
+                const handStrumPinky = strumHandMarks ? strumHandMarks[20] : null;
+                const handStrumVisible = !!handStrumWrist;
+                const usePoseStrum = poseStrumVisible || !handStrumVisible;
 
-                if (poseStrumVisible) {
+                if (usePoseStrum ? poseStrumVisible : handStrumVisible) {
+                    const baseWrist = usePoseStrum ? poseStrumWrist : handStrumWrist;
+                    const baseIndex = usePoseStrum ? poseStrumIndex : handStrumIndex;
+                    const basePinky = usePoseStrum ? poseStrumPinky : handStrumPinky;
                     const anchorX = (
-                        (poseStrumWrist.x * 0.55) +
-                        ((poseStrumIndex ? poseStrumIndex.x : poseStrumWrist.x) * 0.25) +
-                        ((poseStrumPinky ? poseStrumPinky.x : poseStrumWrist.x) * 0.2)
+                        (baseWrist.x * 0.55) +
+                        ((baseIndex ? baseIndex.x : baseWrist.x) * 0.25) +
+                        ((basePinky ? basePinky.x : baseWrist.x) * 0.2)
                     );
                     const anchorY = (
-                        (poseStrumWrist.y * 0.55) +
-                        ((poseStrumIndex ? poseStrumIndex.y : poseStrumWrist.y) * 0.25) +
-                        ((poseStrumPinky ? poseStrumPinky.y : poseStrumWrist.y) * 0.2)
+                        (baseWrist.y * 0.55) +
+                        ((baseIndex ? baseIndex.y : baseWrist.y) * 0.25) +
+                        ((basePinky ? basePinky.y : baseWrist.y) * 0.2)
                     );
                     const projectedWrist = projectVideoPoint(anchorX, anchorY);
                     // Positive factor means "visual left"; mirrored rendering needs opposite screen-space sign.
@@ -1512,7 +1713,7 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
                     const sideDeadzone = minDim * STRING_SIDE_DEADZONE_FACTOR;
                     for (let i = 0; i < stringLines.length; i++) {
                         const metrics = pointToSegmentMetrics(pStrum, stringLines[i].start, stringLines[i].end);
-                        const inPlayableSpan = metrics.t > -0.28 && metrics.t < 1.28;
+                        const inPlayableSpan = metrics.t > STRUM_PLAYABLE_T_MIN && metrics.t < STRUM_PLAYABLE_T_MAX;
                         if (!inPlayableSpan) {
                             prevStringSides[i] = null;
                             continue;
@@ -1582,6 +1783,40 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
 
             } else {
                 prevStringSides.fill(null);
+            }
+
+            // Visual cue when knee gesture changes chord set:
+            // expanding halo ring around upper torso, then dissipates.
+            if (kneeHaloStartMs > 0 && bodyAnchor.x !== null) {
+                const elapsed = Date.now() - kneeHaloStartMs;
+                const t = Math.max(0, Math.min(1, elapsed / KNEE_HALO_DURATION_MS));
+                if (t < 1) {
+                    const m = getLayoutMetrics();
+                    const center = projectVideoPoint(bodyAnchor.x, bodyAnchor.y);
+                    const minDim = Math.min(canvasElement.width, canvasElement.height);
+                    const radius = minDim * (KNEE_HALO_MIN_RADIUS_FACTOR + ((KNEE_HALO_MAX_RADIUS_FACTOR - KNEE_HALO_MIN_RADIUS_FACTOR) * t));
+                    const alpha = 0.95 * (1 - t);
+                    const hue = kneeHaloDirection > 0 ? '74, 222, 128' : '96, 165, 250';
+
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(center.x, center.y, radius, 0, 2 * Math.PI);
+                    canvasCtx.lineWidth = Math.max(4, minDim * 0.01);
+                    canvasCtx.strokeStyle = `rgba(${hue}, ${alpha})`;
+                    canvasCtx.stroke();
+
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(center.x, center.y, radius * 0.68, 0, 2 * Math.PI);
+                    canvasCtx.lineWidth = Math.max(2, minDim * 0.006);
+                    canvasCtx.strokeStyle = `rgba(${hue}, ${alpha * 0.85})`;
+                    canvasCtx.stroke();
+
+                    // Direction cue near halo center.
+                    canvasCtx.font = `bold ${Math.max(24, minDim * 0.048)}px sans-serif`;
+                    canvasCtx.textAlign = 'center';
+                    canvasCtx.textBaseline = 'middle';
+                    canvasCtx.fillStyle = `rgba(${hue}, ${Math.max(0.45, alpha)})`;
+                    canvasCtx.fillText(kneeHaloDirection > 0 ? 'NEXT' : 'PREV', center.x, center.y - (radius * 0.15));
+                }
             }
 
             canvasCtx.restore();
@@ -1677,8 +1912,10 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
                 const leftRisingEdge = leftRaised && !prevLeftKneeRaised;
                 if (rightRisingEdge && !leftRisingEdge) {
                     stepChordSequence(1);
+                    triggerKneeHalo(1);
                 } else if (leftRisingEdge && !rightRisingEdge) {
                     stepChordSequence(-1);
+                    triggerKneeHalo(-1);
                 }
 
                 prevRightKneeRaised = rightRaised;
@@ -1696,30 +1933,57 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
             }
         });
 
-        startBtn.addEventListener('click', () => {
-            initAudio(); 
-            initThreeJS(); 
-            applyInstrumentMode('acoustic');
-            startScreen.style.display = 'none';
-            document.getElementById('toggle-mode-btn').classList.remove('hidden');
-            document.getElementById('shuffle-btn').classList.remove('hidden');
+        function updateInitProgress(percent, message) {
+            const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+            if (initProgressFillEl) initProgressFillEl.style.width = `${clamped}%`;
+            if (initProgressValueEl) initProgressValueEl.textContent = `${clamped}%`;
+            if (message && initStatusEl) initStatusEl.textContent = message;
+        }
 
-            hardenInlineVideo(videoElement);
+        async function bootstrapApp() {
+            try {
+                updateInitProgress(6, 'Preparazione ambiente...');
+                syncCanvases();
 
-            const webcamCamera = new Camera(videoElement, {
-                width: Math.max(640, window.innerWidth),
-                height: Math.max(480, window.innerHeight),
-                onFrame: async () => {
-                    await pose.send({image: videoElement});
-                    await hands.send({image: videoElement});
-                }
-            });
-            webcamCamera.start()
-                .then(() => videoElement.play())
-                .catch((err) => console.error('Camera start failed:', err));
+                updateInitProgress(22, 'Avvio audio...');
+                initAudio();
 
-            syncCanvases();
-        });
+                updateInitProgress(46, 'Caricamento scena 3D...');
+                initThreeJS();
+                applyInstrumentMode('acoustic');
+
+                updateInitProgress(68, 'Connessione webcam...');
+                hardenInlineVideo(videoElement);
+                const webcamCamera = new Camera(videoElement, {
+                    width: Math.max(640, window.innerWidth),
+                    height: Math.max(480, window.innerHeight),
+                    onFrame: async () => {
+                        await pose.send({image: videoElement});
+                        await hands.send({image: videoElement});
+                    }
+                });
+                await webcamCamera.start();
+
+                updateInitProgress(90, 'Quasi pronto...');
+                try { await videoElement.play(); } catch (e) {}
+                syncCanvases();
+
+                updateInitProgress(100, 'Pronto!');
+                document.getElementById('toggle-mode-btn').classList.remove('hidden');
+                document.getElementById('shuffle-btn').classList.remove('hidden');
+                setTimeout(() => {
+                    startScreen.style.display = 'none';
+                }, 240);
+            } catch (err) {
+                console.error('Init failed:', err);
+                updateInitProgress(100, 'Errore avvio: consenti webcam e ricarica la pagina.');
+                if (initStatusEl) initStatusEl.classList.add('text-red-300');
+                if (initProgressFillEl) initProgressFillEl.classList.remove('from-blue-500', 'to-purple-500');
+                if (initProgressFillEl) initProgressFillEl.classList.add('bg-red-500');
+            }
+        }
+
+        bootstrapApp();
 
         window.addEventListener('resize', syncCanvases);
 
