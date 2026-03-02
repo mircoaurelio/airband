@@ -939,7 +939,13 @@
         const MAX_GUITAR_SCALE = 2.95;
         const GUITAR_Y_OFFSET_FACTOR = 0.27;
         const GUITAR_Y_LIFT = 0.115;
-        const ANCHOR_LERP = 0.28;
+        const ANCHOR_SPRING = 0.32;
+        const ANCHOR_DAMPING = 0.58;
+        const ANCHOR_MAX_STEP = 0.032;
+        const ANCHOR_DEADZONE_XY = 0.0026;
+        const ANCHOR_DEADZONE_Z = 0.0036;
+        const ANCHOR_HARD_RESET_DIST = 0.22;
+        const ANCHOR_SETTLE_VEL = 0.00065;
         const SCALE_LERP = 0.24;
         const KNEE_HALO_DURATION_MS = 780;
         const KNEE_HALO_MIN_RADIUS_FACTOR = 0.1;
@@ -952,6 +958,10 @@
         function triggerKneeHalo(direction) {
             kneeHaloDirection = direction;
             kneeHaloStartMs = Date.now();
+        }
+
+        function clamp(value, min, max) {
+            return Math.max(min, Math.min(max, value));
         }
 
         function getLayoutMetrics() {
@@ -1906,11 +1916,55 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
                     bodyAnchor.y = targetY;
                     bodyAnchor.z = midZ;
                     bodyScale = targetScale;
+                    bodyAnchor.vx = 0;
+                    bodyAnchor.vy = 0;
+                    bodyAnchor.vz = 0;
                 } else {
-                    bodyAnchor.x = bodyAnchor.x * (1 - ANCHOR_LERP) + midX * ANCHOR_LERP;
-                    bodyAnchor.y = bodyAnchor.y * (1 - ANCHOR_LERP) + targetY * ANCHOR_LERP;
-                    bodyAnchor.z = (bodyAnchor.z || 0) * (1 - ANCHOR_LERP) + midZ * ANCHOR_LERP;
-                    bodyScale = bodyScale * (1 - SCALE_LERP) + targetScale * SCALE_LERP;
+                    bodyAnchor.vx = bodyAnchor.vx || 0;
+                    bodyAnchor.vy = bodyAnchor.vy || 0;
+                    bodyAnchor.vz = bodyAnchor.vz || 0;
+
+                    let errX = midX - bodyAnchor.x;
+                    let errY = targetY - bodyAnchor.y;
+                    let errZ = midZ - (bodyAnchor.z || 0);
+                    const errMag = Math.hypot(errX, errY, errZ);
+
+                    // If tracking jumps hard (occlusion/reacquire), snap and clear velocity.
+                    if (errMag > ANCHOR_HARD_RESET_DIST) {
+                        bodyAnchor.x = midX;
+                        bodyAnchor.y = targetY;
+                        bodyAnchor.z = midZ;
+                        bodyAnchor.vx = 0;
+                        bodyAnchor.vy = 0;
+                        bodyAnchor.vz = 0;
+                    } else {
+                        // Ignore tiny hand/pose noise to keep the instrument semy steady.
+                        if (Math.abs(errX) < ANCHOR_DEADZONE_XY) errX = 0;
+                        if (Math.abs(errY) < ANCHOR_DEADZONE_XY) errY = 0;
+                        if (Math.abs(errZ) < ANCHOR_DEADZONE_Z) errZ = 0;
+
+                        bodyAnchor.vx = (bodyAnchor.vx + errX * ANCHOR_SPRING) * ANCHOR_DAMPING;
+                        bodyAnchor.vy = (bodyAnchor.vy + errY * ANCHOR_SPRING) * ANCHOR_DAMPING;
+                        bodyAnchor.vz = (bodyAnchor.vz + errZ * ANCHOR_SPRING) * ANCHOR_DAMPING;
+
+                        bodyAnchor.x += clamp(bodyAnchor.vx, -ANCHOR_MAX_STEP, ANCHOR_MAX_STEP);
+                        bodyAnchor.y += clamp(bodyAnchor.vy, -ANCHOR_MAX_STEP, ANCHOR_MAX_STEP);
+                        bodyAnchor.z = (bodyAnchor.z || 0) + clamp(bodyAnchor.vz, -ANCHOR_MAX_STEP, ANCHOR_MAX_STEP);
+
+                        if (
+                            Math.abs(bodyAnchor.vx) < ANCHOR_SETTLE_VEL &&
+                            Math.abs(bodyAnchor.vy) < ANCHOR_SETTLE_VEL &&
+                            Math.abs(bodyAnchor.vz) < ANCHOR_SETTLE_VEL
+                        ) {
+                            bodyAnchor.vx = 0;
+                            bodyAnchor.vy = 0;
+                            bodyAnchor.vz = 0;
+                        }
+                    }
+
+                    const scaleError = targetScale - bodyScale;
+                    const dynamicScaleLerp = Math.min(0.42, SCALE_LERP + Math.abs(scaleError) * 0.26);
+                    bodyScale += scaleError * dynamicScaleLerp;
                 }
 
                 // Knee gestures switch famous pop chord sets:
