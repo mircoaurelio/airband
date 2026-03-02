@@ -64,6 +64,9 @@
         #toggle-mode-btn {
             pointer-events: auto; /* Consente al bottone di essere cliccato */
         }
+        #shuffle-btn {
+            pointer-events: auto;
+        }
     </style>
 </head>
 <body>
@@ -72,8 +75,9 @@
         <h1 class="text-6xl font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500">AIR BAND</h1>
         <p class="text-gray-400 mb-8 max-w-md text-center">
             Usa la tua webcam per suonare una chitarra invisibile. <br><br>
-            <strong>Distanza tra le mani:</strong> Sceglie l'accordo.<br>
-            <strong>Dita della mano destra:</strong> Tocca le corde (la zona tra il busto e la mano sinistra) con i polpastrelli!
+            <strong>Distanza mano sinistra-busto:</strong> Sceglie l'accordo.<br>
+            <strong>Polso destro (pose):</strong> Attraversa la linea corde per strummare.<br>
+            <strong>Direzione:</strong> Alto→basso = downstroke, basso→alto = upstroke inverso.
         </p>
         <button id="start-btn" class="px-8 py-4 bg-purple-600 hover:bg-purple-500 text-white rounded-full font-bold text-xl transition shadow-lg shadow-purple-500/50">
             Inizia a Suonare
@@ -91,6 +95,9 @@
         <button id="toggle-mode-btn" class="absolute top-6 right-6 w-14 h-14 flex items-center justify-center bg-black/40 hover:bg-black/70 backdrop-blur-md rounded-full text-white text-3xl border border-white/20 transition-all hidden z-50 shadow-lg" title="Cambia Chitarra">
             🎸
         </button>
+        <button id="shuffle-btn" class="absolute top-6 right-24 w-14 h-14 flex items-center justify-center bg-black/40 hover:bg-black/70 backdrop-blur-md rounded-full text-white text-3xl border border-white/20 transition-all hidden z-50 shadow-lg" title="Shuffle accordi selezionati">
+            🔀
+        </button>
     </div>
 
     <script>
@@ -98,20 +105,100 @@
         let audioCtx;
         let distortionNode;
         let distGain;
+        let rockCabLowpass;
+        let rockCabHighpass;
+        let rockPresenceEq;
+        let reverseDistortionNode;
+        let reverseDistGain;
+        let reverseCabBandpass;
+        let reversePresenceEq;
         let masterCompressor;
+        let isReverseVMode = false;
+        let isBassMode = false;
         let isRockMode = false;
         
-        // C Major Scale Chords (Frequencies in Hz) - Added 5th note for Thumb
-        const CHORDS = [
-            { name: "C",  notes: [130.81, 164.81, 196.00, 261.63, 329.63] },
-            { name: "Dm", notes: [146.83, 174.61, 220.00, 293.66, 349.23] },
-            { name: "Em", notes: [164.81, 196.00, 246.94, 329.63, 392.00] },
-            { name: "F",  notes: [174.61, 220.00, 261.63, 349.23, 440.00] },
-            { name: "G",  notes: [196.00, 246.94, 293.66, 392.00, 493.88] },
-            { name: "Am", notes: [220.00, 261.63, 329.63, 440.00, 523.25] } 
+        // Famous pop progressions as 12-zone chord sets (right/left knee switches set).
+        // Low -> high string frequencies for each chord voicing.
+        const GUITAR_CHORD_SETS = [
+            {
+                name: "I-V-vi-IV",
+                chords: [
+                    { name: "G",  notes: [98.00, 123.47, 146.83, 196.00, 246.94, 392.00] },
+                    { name: "D",  notes: [73.42, 110.00, 146.83, 220.00, 293.66, 369.99] },
+                    { name: "Em", notes: [82.41, 123.47, 164.81, 196.00, 246.94, 329.63] },
+                    { name: "C",  notes: [65.41, 130.81, 164.81, 196.00, 261.63, 329.63] },
+                    { name: "G",  notes: [98.00, 123.47, 146.83, 196.00, 246.94, 392.00] },
+                    { name: "D",  notes: [73.42, 110.00, 146.83, 220.00, 293.66, 369.99] },
+                    { name: "Em", notes: [82.41, 123.47, 164.81, 196.00, 246.94, 329.63] },
+                    { name: "C",  notes: [65.41, 130.81, 164.81, 196.00, 261.63, 329.63] },
+                    { name: "G",  notes: [98.00, 123.47, 146.83, 196.00, 246.94, 392.00] },
+                    { name: "D",  notes: [73.42, 110.00, 146.83, 220.00, 293.66, 369.99] },
+                    { name: "Em", notes: [82.41, 123.47, 164.81, 196.00, 246.94, 329.63] },
+                    { name: "C",  notes: [65.41, 130.81, 164.81, 196.00, 261.63, 329.63] }
+                ]
+            },
+            {
+                name: "vi-IV-I-V",
+                chords: [
+                    { name: "Em", notes: [82.41, 123.47, 164.81, 196.00, 246.94, 329.63] },
+                    { name: "C",  notes: [65.41, 130.81, 164.81, 196.00, 261.63, 329.63] },
+                    { name: "G",  notes: [98.00, 123.47, 146.83, 196.00, 246.94, 392.00] },
+                    { name: "D",  notes: [73.42, 110.00, 146.83, 220.00, 293.66, 369.99] },
+                    { name: "Em", notes: [82.41, 123.47, 164.81, 196.00, 246.94, 329.63] },
+                    { name: "C",  notes: [65.41, 130.81, 164.81, 196.00, 261.63, 329.63] },
+                    { name: "G",  notes: [98.00, 123.47, 146.83, 196.00, 246.94, 392.00] },
+                    { name: "D",  notes: [73.42, 110.00, 146.83, 220.00, 293.66, 369.99] },
+                    { name: "Em", notes: [82.41, 123.47, 164.81, 196.00, 246.94, 329.63] },
+                    { name: "C",  notes: [65.41, 130.81, 164.81, 196.00, 261.63, 329.63] },
+                    { name: "G",  notes: [98.00, 123.47, 146.83, 196.00, 246.94, 392.00] },
+                    { name: "D",  notes: [73.42, 110.00, 146.83, 220.00, 293.66, 369.99] }
+                ]
+            },
+            {
+                name: "I-vi-IV-V",
+                chords: [
+                    { name: "G",  notes: [98.00, 123.47, 146.83, 196.00, 246.94, 392.00] },
+                    { name: "Em", notes: [82.41, 123.47, 164.81, 196.00, 246.94, 329.63] },
+                    { name: "C",  notes: [65.41, 130.81, 164.81, 196.00, 261.63, 329.63] },
+                    { name: "D",  notes: [73.42, 110.00, 146.83, 220.00, 293.66, 369.99] },
+                    { name: "G",  notes: [98.00, 123.47, 146.83, 196.00, 246.94, 392.00] },
+                    { name: "Em", notes: [82.41, 123.47, 164.81, 196.00, 246.94, 329.63] },
+                    { name: "C",  notes: [65.41, 130.81, 164.81, 196.00, 261.63, 329.63] },
+                    { name: "D",  notes: [73.42, 110.00, 146.83, 220.00, 293.66, 369.99] },
+                    { name: "G",  notes: [98.00, 123.47, 146.83, 196.00, 246.94, 392.00] },
+                    { name: "Em", notes: [82.41, 123.47, 164.81, 196.00, 246.94, 329.63] },
+                    { name: "C",  notes: [65.41, 130.81, 164.81, 196.00, 261.63, 329.63] },
+                    { name: "D",  notes: [73.42, 110.00, 146.83, 220.00, 293.66, 369.99] }
+                ]
+            }
         ];
+        const BASS_CHORD_SETS = [
+            {
+                name: "Bass Pop 4",
+                chords: [
+                    { name: "Em", notes: [41.20, 61.74, 82.41, 123.47] },
+                    { name: "C",  notes: [32.70, 49.00, 65.41, 98.00] },
+                    { name: "G",  notes: [49.00, 73.42, 98.00, 146.83] },
+                    { name: "D",  notes: [36.71, 55.00, 73.42, 110.00] }
+                ]
+            }
+        ];
+        let CHORD_SETS = GUITAR_CHORD_SETS;
+        let CHORDS = CHORD_SETS[0].chords;
 
         let activeChordIndex = 0;
+        let activeChordSetIndex = 0;
+        let lastGuitarChordSetIndex = 0;
+        const SHUFFLE_SELECTION_INDICES = [0, 2, 3, 5, 7, 9, 10, 11];
+        const SHUFFLE_LOCK_MS = 1800;
+        let shuffleLockUntil = 0;
+        let lastHandSelectedIndex = 0;
+        const KNEE_RAISE_THRESHOLD = 0.045;
+        const KNEE_STEP_LOCK_MS = 1200;
+        let prevRightKneeRaised = false;
+        let prevLeftKneeRaised = false;
+        const NOTE_COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#06b6d4', '#3b82f6', '#a855f7'];
+        let lastPluckedStringIndex = -1;
 
         function makeDistortionCurve(amount) {
             const k = typeof amount === 'number' ? amount : 50;
@@ -138,19 +225,55 @@
             masterCompressor.connect(audioCtx.destination);
             
             distortionNode = audioCtx.createWaveShaper();
-            distortionNode.curve = makeDistortionCurve(150); 
+            distortionNode.curve = makeDistortionCurve(120); 
             distortionNode.oversample = '4x';
             
-            const cabFilter = audioCtx.createBiquadFilter();
-            cabFilter.type = 'lowpass';
-            cabFilter.frequency.value = 3500;
+            rockCabHighpass = audioCtx.createBiquadFilter();
+            rockCabHighpass.type = 'highpass';
+            rockCabHighpass.frequency.value = 95;
+            rockCabHighpass.Q.value = 0.8;
+
+            rockCabLowpass = audioCtx.createBiquadFilter();
+            rockCabLowpass.type = 'lowpass';
+            rockCabLowpass.frequency.value = 3400;
+            rockCabLowpass.Q.value = 0.85;
+
+            rockPresenceEq = audioCtx.createBiquadFilter();
+            rockPresenceEq.type = 'peaking';
+            rockPresenceEq.frequency.value = 2200;
+            rockPresenceEq.Q.value = 1.0;
+            rockPresenceEq.gain.value = 3.2;
 
             distGain = audioCtx.createGain();
-            distGain.gain.value = 0.22; 
+            distGain.gain.value = 0.26; 
             
-            distortionNode.connect(cabFilter);
-            cabFilter.connect(distGain);
+            distortionNode.connect(rockCabHighpass);
+            rockCabHighpass.connect(rockCabLowpass);
+            rockCabLowpass.connect(rockPresenceEq);
+            rockPresenceEq.connect(distGain);
             distGain.connect(masterCompressor);
+
+            reverseDistortionNode = audioCtx.createWaveShaper();
+            reverseDistortionNode.curve = makeDistortionCurve(260);
+            reverseDistortionNode.oversample = '4x';
+
+            reverseCabBandpass = audioCtx.createBiquadFilter();
+            reverseCabBandpass.type = 'bandpass';
+            reverseCabBandpass.frequency.value = 1700;
+            reverseCabBandpass.Q.value = 0.9;
+
+            reversePresenceEq = audioCtx.createBiquadFilter();
+            reversePresenceEq.type = 'highshelf';
+            reversePresenceEq.frequency.value = 2400;
+            reversePresenceEq.gain.value = 5.5;
+
+            reverseDistGain = audioCtx.createGain();
+            reverseDistGain.gain.value = 0.21;
+
+            reverseDistortionNode.connect(reverseCabBandpass);
+            reverseCabBandpass.connect(reversePresenceEq);
+            reversePresenceEq.connect(reverseDistGain);
+            reverseDistGain.connect(masterCompressor);
         }
 
         function ensureAudioReady() {
@@ -164,43 +287,405 @@
             if (!audioCtx) return;
             ensureAudioReady();
             
-            const osc = audioCtx.createOscillator();
-            const gainNode = audioCtx.createGain();
-            
-            if (isRockMode) {
-                osc.type = 'sawtooth';
-                osc.connect(gainNode);
-                gainNode.connect(distortionNode);
+            if (isReverseVMode) {
+                const now = audioCtx.currentTime;
+                const oscMain = audioCtx.createOscillator();
+                const oscOct = audioCtx.createOscillator();
+                const mainGain = audioCtx.createGain();
+                const octGain = audioCtx.createGain();
+                const preShapeGain = audioCtx.createGain();
+                const toneGate = audioCtx.createBiquadFilter();
+                const outGain = audioCtx.createGain();
+
+                oscMain.type = 'square';
+                oscOct.type = 'sawtooth';
+                oscMain.frequency.setValueAtTime(freq, now);
+                oscOct.frequency.setValueAtTime(freq * 2, now);
+                oscMain.detune.value = 5;
+                oscOct.detune.value = -7;
+
+                mainGain.gain.value = 0.52;
+                octGain.gain.value = 0.18;
+                preShapeGain.gain.value = 1.6;
+
+                toneGate.type = 'highpass';
+                toneGate.frequency.setValueAtTime(170, now);
+                toneGate.Q.value = 0.7;
+
+                oscMain.connect(mainGain);
+                oscOct.connect(octGain);
+                mainGain.connect(preShapeGain);
+                octGain.connect(preShapeGain);
+                preShapeGain.connect(toneGate);
+                toneGate.connect(outGain);
+                outGain.connect(reverseDistortionNode);
+
+                outGain.gain.setValueAtTime(0.0001, now);
+                outGain.gain.linearRampToValueAtTime(0.92, now + 0.003);
+                outGain.gain.exponentialRampToValueAtTime(0.17, now + 0.11);
+                outGain.gain.exponentialRampToValueAtTime(0.01, now + 0.85);
+
+                const dryBlend = audioCtx.createGain();
+                dryBlend.gain.value = 0.06;
+                preShapeGain.connect(dryBlend);
+                dryBlend.connect(masterCompressor);
+
+                oscMain.start(now);
+                oscOct.start(now);
+                oscMain.stop(now + 0.9);
+                oscOct.stop(now + 0.78);
+
+                oscMain.onended = () => {
+                    try { dryBlend.disconnect(); } catch (e) {}
+                    try { mainGain.disconnect(); } catch (e) {}
+                    try { octGain.disconnect(); } catch (e) {}
+                    try { preShapeGain.disconnect(); } catch (e) {}
+                    try { toneGate.disconnect(); } catch (e) {}
+                    try { outGain.disconnect(); } catch (e) {}
+                };
+            } else if (isRockMode) {
+                const now = audioCtx.currentTime;
+                const oscA = audioCtx.createOscillator();
+                const oscB = audioCtx.createOscillator();
+                const oscAGain = audioCtx.createGain();
+                const oscBGain = audioCtx.createGain();
+                const preAmp = audioCtx.createGain();
+                const pickTone = audioCtx.createBiquadFilter();
+                const pickAttackGain = audioCtx.createGain();
+
+                oscA.type = 'sawtooth';
+                oscB.type = 'square';
+                oscA.frequency.setValueAtTime(freq, now);
+                oscB.frequency.setValueAtTime(freq, now);
+                oscA.detune.value = -3;
+                oscB.detune.value = 4;
+
+                oscAGain.gain.value = 0.62;
+                oscBGain.gain.value = 0.24;
+                preAmp.gain.value = 1.35;
+
+                pickTone.type = 'lowpass';
+                pickTone.Q.value = 0.9;
+                pickTone.frequency.setValueAtTime(4700, now);
+                pickTone.frequency.exponentialRampToValueAtTime(2400, now + 0.11);
+
+                oscA.connect(oscAGain);
+                oscB.connect(oscBGain);
+                oscAGain.connect(preAmp);
+                oscBGain.connect(preAmp);
+                preAmp.connect(pickTone);
+                pickTone.connect(pickAttackGain);
+                pickAttackGain.connect(distortionNode);
                 
                 // Small dry blend keeps electric mode audible on all devices.
                 const dryBlend = audioCtx.createGain();
-                dryBlend.gain.value = 0.12;
-                gainNode.connect(dryBlend);
+                dryBlend.gain.value = 0.09;
+                preAmp.connect(dryBlend);
                 dryBlend.connect(masterCompressor);
-                
-                osc.frequency.value = freq;
-                osc.start();
-                gainNode.gain.setValueAtTime(0.8, audioCtx.currentTime);
-                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 1.0);
-                osc.stop(audioCtx.currentTime + 1.0);
-                osc.onended = () => {
+
+                // Sharp pick transient followed by controlled decay for electric feel.
+                pickAttackGain.gain.setValueAtTime(0.0001, now);
+                pickAttackGain.gain.linearRampToValueAtTime(0.95, now + 0.004);
+                pickAttackGain.gain.exponentialRampToValueAtTime(0.22, now + 0.13);
+                pickAttackGain.gain.exponentialRampToValueAtTime(0.01, now + 1.05);
+
+                // Add a very short noise click to emulate pick-on-string.
+                const noiseBuffer = audioCtx.createBuffer(1, Math.floor(audioCtx.sampleRate * 0.02), audioCtx.sampleRate);
+                const noiseData = noiseBuffer.getChannelData(0);
+                for (let i = 0; i < noiseData.length; i++) {
+                    noiseData[i] = (Math.random() * 2 - 1) * (1 - (i / noiseData.length));
+                }
+                const noiseSource = audioCtx.createBufferSource();
+                noiseSource.buffer = noiseBuffer;
+                const noiseFilter = audioCtx.createBiquadFilter();
+                noiseFilter.type = 'bandpass';
+                noiseFilter.frequency.value = 2600;
+                noiseFilter.Q.value = 1.2;
+                const noiseGain = audioCtx.createGain();
+                noiseGain.gain.setValueAtTime(0.0001, now);
+                noiseGain.gain.linearRampToValueAtTime(0.18, now + 0.002);
+                noiseGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.03);
+                noiseSource.connect(noiseFilter);
+                noiseFilter.connect(noiseGain);
+                noiseGain.connect(distortionNode);
+
+                oscA.start(now);
+                oscB.start(now);
+                noiseSource.start(now);
+
+                oscA.stop(now + 1.1);
+                oscB.stop(now + 0.95);
+                noiseSource.stop(now + 0.035);
+
+                oscA.onended = () => {
                     try { dryBlend.disconnect(); } catch (e) {}
-                    try { gainNode.disconnect(); } catch (e) {}
+                    try { oscAGain.disconnect(); } catch (e) {}
+                    try { oscBGain.disconnect(); } catch (e) {}
+                    try { preAmp.disconnect(); } catch (e) {}
+                    try { pickTone.disconnect(); } catch (e) {}
+                    try { pickAttackGain.disconnect(); } catch (e) {}
+                    try { noiseGain.disconnect(); } catch (e) {}
+                    try { noiseFilter.disconnect(); } catch (e) {}
+                };
+            } else if (isBassMode) {
+                const now = audioCtx.currentTime;
+                const bassBus = audioCtx.createGain();
+                const bassHP = audioCtx.createBiquadFilter();
+                const bassLP = audioCtx.createBiquadFilter();
+                const bassBody = audioCtx.createBiquadFilter();
+                const bassGain = audioCtx.createGain();
+
+                bassHP.type = 'highpass';
+                bassHP.frequency.value = 35;
+                bassHP.Q.value = 0.8;
+                bassLP.type = 'lowpass';
+                bassLP.frequency.value = 720;
+                bassLP.Q.value = 0.9;
+                bassBody.type = 'peaking';
+                bassBody.frequency.value = 120;
+                bassBody.Q.value = 1.1;
+                bassBody.gain.value = 4.5;
+
+                bassGain.connect(bassHP);
+                bassHP.connect(bassLP);
+                bassLP.connect(bassBody);
+                bassBody.connect(masterCompressor);
+
+                const bassFund = audioCtx.createOscillator();
+                const bassHarm = audioCtx.createOscillator();
+                const bassSub = audioCtx.createOscillator();
+                bassFund.type = 'triangle';
+                bassHarm.type = 'sawtooth';
+                bassSub.type = 'sine';
+                bassFund.frequency.setValueAtTime(freq, now);
+                bassHarm.frequency.setValueAtTime(freq * 2, now);
+                bassSub.frequency.setValueAtTime(freq * 0.5, now);
+                bassHarm.detune.value = -3;
+
+                const fundGain = audioCtx.createGain();
+                const harmGain = audioCtx.createGain();
+                const subGain = audioCtx.createGain();
+                fundGain.gain.value = 0.72;
+                harmGain.gain.value = 0.11;
+                subGain.gain.value = 0.26;
+
+                bassFund.connect(fundGain);
+                bassHarm.connect(harmGain);
+                bassSub.connect(subGain);
+                fundGain.connect(bassBus);
+                harmGain.connect(bassBus);
+                subGain.connect(bassBus);
+                bassBus.connect(bassGain);
+                bassGain.gain.setValueAtTime(0.0001, now);
+                bassGain.gain.linearRampToValueAtTime(0.7, now + 0.01);
+                bassGain.gain.exponentialRampToValueAtTime(0.24, now + 0.2);
+                bassGain.gain.exponentialRampToValueAtTime(0.001, now + 1.25);
+
+                bassFund.start(now);
+                bassHarm.start(now);
+                bassSub.start(now);
+                bassFund.stop(now + 1.3);
+                bassHarm.stop(now + 0.85);
+                bassSub.stop(now + 1.45);
+
+                bassFund.onended = () => {
+                    try { bassGain.disconnect(); } catch (e) {}
+                    try { bassBus.disconnect(); } catch (e) {}
+                    try { bassHP.disconnect(); } catch (e) {}
+                    try { bassLP.disconnect(); } catch (e) {}
+                    try { bassBody.disconnect(); } catch (e) {}
+                    try { fundGain.disconnect(); } catch (e) {}
+                    try { harmGain.disconnect(); } catch (e) {}
+                    try { subGain.disconnect(); } catch (e) {}
                 };
             } else {
-                osc.type = 'triangle';
-                osc.connect(gainNode);
-                gainNode.connect(masterCompressor); 
-                
-                osc.frequency.value = freq;
-                osc.start();
-                gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
-                gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.5);
-                osc.stop(audioCtx.currentTime + 1.5);
-                osc.onended = () => {
-                    try { gainNode.disconnect(); } catch (e) {}
+                const now = audioCtx.currentTime;
+                const noteBus = audioCtx.createGain();
+                const hp = audioCtx.createBiquadFilter();
+                const body = audioCtx.createBiquadFilter();
+                const lp = audioCtx.createBiquadFilter();
+                const panner = audioCtx.createStereoPanner();
+                const outputGain = audioCtx.createGain();
+
+                hp.type = 'highpass';
+                hp.frequency.value = 90;
+                hp.Q.value = 0.65;
+
+                body.type = 'peaking';
+                body.frequency.value = Math.max(120, Math.min(420, freq * 1.15));
+                body.Q.value = 1.0;
+                body.gain.value = 4.2;
+
+                lp.type = 'lowpass';
+                lp.Q.value = 0.9;
+                lp.frequency.setValueAtTime(4200, now);
+                lp.frequency.exponentialRampToValueAtTime(1900, now + 0.5);
+
+                panner.pan.value = (Math.random() * 0.18) - 0.09;
+
+                noteBus.connect(hp);
+                hp.connect(body);
+                body.connect(lp);
+                lp.connect(panner);
+                panner.connect(outputGain);
+                outputGain.connect(masterCompressor);
+
+                // Main string partials: warm body + brighter harmonics.
+                const fundamental = audioCtx.createOscillator();
+                const harmonic2 = audioCtx.createOscillator();
+                const harmonic3 = audioCtx.createOscillator();
+                const stringGain = audioCtx.createGain();
+
+                fundamental.type = 'triangle';
+                harmonic2.type = 'sine';
+                harmonic3.type = 'triangle';
+
+                fundamental.frequency.setValueAtTime(freq, now);
+                harmonic2.frequency.setValueAtTime(freq * 2, now);
+                harmonic3.frequency.setValueAtTime(freq * 3.02, now);
+                harmonic2.detune.value = -4;
+                harmonic3.detune.value = 6;
+
+                fundamental.connect(stringGain);
+                harmonic2.connect(stringGain);
+                harmonic3.connect(stringGain);
+                stringGain.connect(noteBus);
+
+                stringGain.gain.setValueAtTime(0.0001, now);
+                stringGain.gain.linearRampToValueAtTime(0.34, now + 0.006);
+                stringGain.gain.exponentialRampToValueAtTime(0.11, now + 0.16);
+                stringGain.gain.exponentialRampToValueAtTime(0.0009, now + 2.25);
+
+                // Pick attack: a very short filtered noise burst makes plucks realistic.
+                const noiseBuffer = audioCtx.createBuffer(1, Math.floor(audioCtx.sampleRate * 0.035), audioCtx.sampleRate);
+                const noiseData = noiseBuffer.getChannelData(0);
+                for (let i = 0; i < noiseData.length; i++) {
+                    noiseData[i] = (Math.random() * 2 - 1) * (1 - (i / noiseData.length));
+                }
+                const noiseSource = audioCtx.createBufferSource();
+                noiseSource.buffer = noiseBuffer;
+                const pickFilter = audioCtx.createBiquadFilter();
+                pickFilter.type = 'bandpass';
+                pickFilter.frequency.value = 3200;
+                pickFilter.Q.value = 1.1;
+                const pickGain = audioCtx.createGain();
+                pickGain.gain.setValueAtTime(0.0001, now);
+                pickGain.gain.linearRampToValueAtTime(0.19, now + 0.002);
+                pickGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.042);
+                noiseSource.connect(pickFilter);
+                pickFilter.connect(pickGain);
+                pickGain.connect(noteBus);
+
+                outputGain.gain.setValueAtTime(1.0, now);
+                outputGain.gain.exponentialRampToValueAtTime(0.98, now + 0.4);
+
+                fundamental.start(now);
+                harmonic2.start(now);
+                harmonic3.start(now);
+                noiseSource.start(now);
+
+                fundamental.stop(now + 2.3);
+                harmonic2.stop(now + 1.8);
+                harmonic3.stop(now + 1.5);
+                noiseSource.stop(now + 0.05);
+
+                fundamental.onended = () => {
+                    try { stringGain.disconnect(); } catch (e) {}
+                    try { noteBus.disconnect(); } catch (e) {}
+                    try { hp.disconnect(); } catch (e) {}
+                    try { body.disconnect(); } catch (e) {}
+                    try { lp.disconnect(); } catch (e) {}
+                    try { panner.disconnect(); } catch (e) {}
+                    try { outputGain.disconnect(); } catch (e) {}
+                    try { pickGain.disconnect(); } catch (e) {}
+                    try { pickFilter.disconnect(); } catch (e) {}
                 };
             }
+        }
+
+        function pointToSegmentMetrics(point, a, b) {
+            const abx = b.x - a.x;
+            const aby = b.y - a.y;
+            const apx = point.x - a.x;
+            const apy = point.y - a.y;
+            const l2 = (abx * abx) + (aby * aby);
+
+            if (l2 < 1e-6) {
+                return { t: 0, dist: Math.hypot(apx, apy), side: 0 };
+            }
+
+            const rawT = ((apx * abx) + (apy * aby)) / l2;
+            const t = Math.max(0, Math.min(1, rawT));
+            const projX = a.x + (abx * t);
+            const projY = a.y + (aby * t);
+            const dist = Math.hypot(point.x - projX, point.y - projY);
+            const side = (abx * apy) - (aby * apx);
+
+            return { t: rawT, dist, side };
+        }
+
+        function ensureStringTrackingSize(count) {
+            if (prevStringSides.length !== count) {
+                prevStringSides = new Array(count).fill(null);
+                lastStringHitTimes = new Array(count).fill(0);
+            }
+        }
+
+        function shuffleChordFromSelection() {
+            let pool = SHUFFLE_SELECTION_INDICES.filter((idx) => idx >= 0 && idx < CHORDS.length);
+            if (CHORDS.length <= 4) {
+                pool = Array.from({ length: CHORDS.length }, (_, i) => i);
+            }
+            if (!pool.length) return;
+
+            let nextIndex = pool[Math.floor(Math.random() * pool.length)];
+            if (pool.length > 1 && nextIndex === activeChordIndex) {
+                nextIndex = pool[Math.floor(Math.random() * pool.length)];
+            }
+
+            activeChordIndex = nextIndex;
+            shuffleLockUntil = Date.now() + SHUFFLE_LOCK_MS;
+            lastChordName = "";
+            updateChordText(CHORDS[activeChordIndex].name);
+        }
+
+        function stepChordSequence(step) {
+            if (!CHORD_SETS.length) return;
+            const len = CHORD_SETS.length;
+            activeChordSetIndex = (activeChordSetIndex + step + len) % len;
+            if (!isBassMode) {
+                lastGuitarChordSetIndex = activeChordSetIndex;
+            }
+            CHORDS = CHORD_SETS[activeChordSetIndex].chords;
+            activeChordIndex = Math.max(0, Math.min(CHORDS.length - 1, lastHandSelectedIndex));
+            shuffleLockUntil = Date.now() + KNEE_STEP_LOCK_MS;
+            lastChordName = "";
+            updateChordText(CHORDS[activeChordIndex].name);
+        }
+
+        function applyInstrumentMode(mode) {
+            isRockMode = mode === 'rock';
+            isReverseVMode = mode === 'reversev';
+            isBassMode = mode === 'bass';
+
+            if (isBassMode) {
+                CHORD_SETS = BASS_CHORD_SETS;
+                activeChordSetIndex = 0;
+            } else {
+                CHORD_SETS = GUITAR_CHORD_SETS;
+                activeChordSetIndex = Math.max(0, Math.min(CHORD_SETS.length - 1, lastGuitarChordSetIndex));
+            }
+
+            CHORDS = CHORD_SETS[activeChordSetIndex].chords;
+            activeChordIndex = Math.max(0, Math.min(CHORDS.length - 1, lastHandSelectedIndex));
+
+            if (fallbackGuitar) fallbackGuitar.visible = mode === 'acoustic';
+            if (rockGuitar) rockGuitar.visible = mode === 'rock';
+            if (bassGuitar) bassGuitar.visible = mode === 'bass';
+            if (reverseVGuitar) reverseVGuitar.visible = mode === 'reversev';
+
+            lastChordName = "";
+            updateChordText(CHORDS[activeChordIndex].name);
         }
 
         // --- MediaPipe & Logic Setup ---
@@ -239,8 +724,8 @@
         // --- 3D AR Variables (Three.js) ---
         let scene, camera, renderer;
         let guitarGroup;
-        let fallbackGuitar, rockGuitar; 
-        let acousticNeckAnchor, rockNeckAnchor; 
+        let fallbackGuitar, rockGuitar, bassGuitar, reverseVGuitar; 
+        let acousticNeckAnchor, rockNeckAnchor, bassNeckAnchor, reverseVNeckAnchor; 
         let chordSprite, chordCtx, chordTexture; 
         let lastChordName = "";
         const guitarShaderTimeUniforms = [];
@@ -248,19 +733,36 @@
         // Mechanics variables
         let bodyAnchor = { x: null, y: null, z: null }; 
         let bodyScale = 1.0; 
-        let fingerStates = [false, false, false, false, false]; 
-        let fingerLastPluckTime = [0, 0, 0, 0, 0]; 
-        let fingerHitVisualUntil = [0, 0, 0, 0, 0];
-        const FINGER_HIT_COLORS = ['#ff5c7a', '#ffa94d', '#ffd43b', '#69db7c', '#4dabf7'];
-        const FINGER_HIT_MS = 120;
+        let latestPoseLandmarks = null;
+        let prevStringSides = [];
+        let lastStringHitTimes = [];
+        const STRING_NOTE_DEBOUNCE_MS = 55;
+        const STRING_TRACK_SPACING_FACTOR = 0.0165;
+        const VISUAL_STRING_SPACING = 0.055;
+        const BASS_TRACK_SPACING_FACTOR = 0.032;
+        const BASS_VISUAL_STRING_SPACING = 0.14;
+        const STRING_SIDE_DEADZONE_FACTOR = 0.005;
+        const SHOW_STRUM_GUIDE_LINE = false;
+        const IS_RENDER_MIRRORED = true;
+        const STRUM_POINT_LEFT_FACTOR = 0.07;
+        const STRUM_POINT_DOWN_FACTOR = 0.005;
+        const CHORD_SELECT_MIN_DIST = 0.14;
+        const CHORD_SELECT_MAX_DIST = 0.78;
+        const CHORD_SELECT_CURVE = 0.68;
+        const BASE_NECK_LENGTH = 3.8;
+        const NECK_ROTATION_DEADZONE_LOCAL = 0.9;
+        const NECK_ANGLE_LERP = 0.22;
+        const NECK_LENGTH_LERP = 0.28;
+        const MIN_DESIRED_NECK_LENGTH = 2.7;
+        const MAX_DESIRED_NECK_LENGTH = 6.1;
 
         let lastNeckAngleZ = -0.5;
         let lastNeckAngleY = 0;
-        let desiredNeckLength = 3.5;
+        let desiredNeckLength = BASE_NECK_LENGTH;
         let bodyLostTimer = null; 
-        const SHOULDER_SCALE_MULT = 2.9;
-        const MIN_GUITAR_SCALE = 0.55;
-        const MAX_GUITAR_SCALE = 2.4;
+        const SHOULDER_SCALE_MULT = 3.15;
+        const MIN_GUITAR_SCALE = 0.62;
+        const MAX_GUITAR_SCALE = 2.7;
         const GUITAR_Y_OFFSET_FACTOR = 0.34;
         const GUITAR_Y_LIFT = 0.04;
         const ANCHOR_LERP = 0.28;
@@ -424,43 +926,86 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
             guitarGroup.visible = false; 
             scene.add(guitarGroup);
 
-            const FIXED_NECK_LENGTH = 3.5;
+            const FIXED_NECK_LENGTH = BASE_NECK_LENGTH;
 
             // --- 2. Fallback Acoustic Procedural Guitar ---
             fallbackGuitar = new THREE.Group();
             
-            const bodyGeom = new THREE.CylinderGeometry(1.6, 1.6, 0.4, 32);
-            bodyGeom.rotateX(Math.PI / 2);
-            bodyGeom.scale(1.2, 0.85, 1); 
-            const bodyMat = new THREE.MeshPhysicalMaterial({ color: 0x8b4513, roughness: 0.3, metalness: 0.1 });
+            // Classical guitar silhouette rebuilt with cleaner proportions.
+            const bodyShape = new THREE.Shape();
+            bodyShape.moveTo(0.72, 0.38); // neck joint upper shoulder
+            bodyShape.bezierCurveTo(0.55, 0.85, 0.02, 1.1, -0.64, 0.9); // upper bout
+            bodyShape.bezierCurveTo(-1.02, 0.78, -1.2, 0.52, -1.26, 0.3); // waist entry
+            bodyShape.bezierCurveTo(-1.34, 0.04, -1.56, -0.04, -1.84, -0.12); // waist
+            bodyShape.bezierCurveTo(-2.4, -0.28, -2.84, -0.62, -2.9, -1.08); // lower bout shoulder
+            bodyShape.bezierCurveTo(-2.94, -1.42, -2.58, -1.72, -1.95, -1.68); // bottom
+            bodyShape.bezierCurveTo(-1.18, -1.58, -0.58, -1.15, -0.28, -0.56); // lower bout return
+            bodyShape.bezierCurveTo(-0.12, -0.24, 0.12, -0.16, 0.36, -0.22); // back to waist
+            bodyShape.bezierCurveTo(0.7, -0.3, 0.92, -0.08, 0.9, 0.14); // shoulder lower
+            bodyShape.bezierCurveTo(0.88, 0.24, 0.8, 0.31, 0.72, 0.38); // close near neck
+
+            const bodyGeom = new THREE.ExtrudeGeometry(bodyShape, {
+                depth: 0.36,
+                bevelEnabled: true,
+                bevelThickness: 0.025,
+                bevelSize: 0.025,
+                bevelSegments: 2,
+                curveSegments: 32
+            });
+            bodyGeom.translate(0, 0, -0.18);
+            const bodyMat = new THREE.MeshPhysicalMaterial({ color: 0x8a5126, roughness: 0.36, metalness: 0.06 });
             const body = new THREE.Mesh(bodyGeom, bodyMat);
-            body.position.set(-0.8, 0, 0); 
+            body.position.set(0.0, 0, 0);
             fallbackGuitar.add(body);
 
-            const holeGeom = new THREE.CylinderGeometry(0.45, 0.45, 0.42, 16);
+            const topPlate = new THREE.Mesh(
+                new THREE.ShapeGeometry(bodyShape, 32),
+                new THREE.MeshPhysicalMaterial({ color: 0xc98e5a, roughness: 0.52, metalness: 0.02 })
+            );
+            topPlate.position.set(0.0, 0, 0.181);
+            fallbackGuitar.add(topPlate);
+
+            const soundHoleRadius = 0.31;
+            const holeGeom = new THREE.CylinderGeometry(soundHoleRadius, soundHoleRadius, 0.42, 24);
             holeGeom.rotateX(Math.PI / 2);
-            const holeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
+            const holeMat = new THREE.MeshBasicMaterial({ color: 0x0b0b0b });
             const hole = new THREE.Mesh(holeGeom, holeMat);
-            hole.position.set(-0.2, 0, 0);
+            hole.position.set(-0.72, 0.0, 0.0);
             fallbackGuitar.add(hole);
 
-            const pgGeom = new THREE.CylinderGeometry(0.75, 0.75, 0.41, 24, 1, false, 0, Math.PI);
-            pgGeom.rotateX(Math.PI / 2);
-            pgGeom.scale(0.8, 1, 1);
-            const pgMat = new THREE.MeshPhysicalMaterial({ color: 0x220500 });
-            const pickguard = new THREE.Mesh(pgGeom, pgMat);
-            pickguard.position.set(0.1, -0.6, 0.01);
-            pickguard.rotation.z = -0.4;
-            fallbackGuitar.add(pickguard);
+            const rosette = new THREE.Mesh(
+                new THREE.RingGeometry(soundHoleRadius + 0.045, soundHoleRadius + 0.085, 48),
+                new THREE.MeshStandardMaterial({ color: 0xe0be96, roughness: 0.45, metalness: 0.04, side: THREE.DoubleSide })
+            );
+            rosette.position.set(-0.72, 0.0, 0.186);
+            fallbackGuitar.add(rosette);
 
-            const aBridgeGeom = new THREE.BoxGeometry(0.2, 0.8, 0.15);
-            const aBridgeMat = new THREE.MeshStandardMaterial({ color: 0x3d1c00 });
-            const acousticBridge = new THREE.Mesh(aBridgeGeom, aBridgeMat);
-            acousticBridge.position.set(-0.9, 0, 0.22);
-            fallbackGuitar.add(acousticBridge);
+            const tieBlock = new THREE.Mesh(
+                new THREE.BoxGeometry(0.22, 1.05, 0.12),
+                new THREE.MeshStandardMaterial({ color: 0x4a220c, roughness: 0.55 })
+            );
+            tieBlock.position.set(-1.72, 0.0, 0.23);
+            fallbackGuitar.add(tieBlock);
+
+            const saddle = new THREE.Mesh(
+                new THREE.BoxGeometry(0.035, 0.8, 0.05),
+                new THREE.MeshStandardMaterial({ color: 0xf1e5d2, roughness: 0.45 })
+            );
+            saddle.position.set(-1.66, 0.0, 0.29);
+            fallbackGuitar.add(saddle);
+
+            for (let i = 0; i < 6; i++) {
+                const tiePoint = new THREE.Mesh(
+                    new THREE.CylinderGeometry(0.011, 0.011, 0.04, 10),
+                    new THREE.MeshStandardMaterial({ color: 0x1b1b1b, roughness: 0.42 })
+                );
+                tiePoint.rotation.x = Math.PI / 2;
+                tiePoint.position.set(-1.76, (i - 2.5) * 0.11, 0.27);
+                fallbackGuitar.add(tiePoint);
+            }
 
             acousticNeckAnchor = new THREE.Group();
-            acousticNeckAnchor.position.set(0.6, 0, 0); 
+            acousticNeckAnchor.position.set(0.78, 0, 0); 
             
             const neckGeom = new THREE.BoxGeometry(FIXED_NECK_LENGTH, 0.3, 0.15);
             neckGeom.translate(FIXED_NECK_LENGTH / 2, 0, 0); 
@@ -481,12 +1026,26 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
                 acousticNeckAnchor.add(fret);
             }
 
+            const headstockShape = new THREE.Shape();
+            headstockShape.moveTo(0.0, -0.24);
+            headstockShape.lineTo(0.85, -0.18);
+            headstockShape.lineTo(1.0, 0.0);
+            headstockShape.lineTo(0.85, 0.18);
+            headstockShape.lineTo(0.0, 0.24);
+            headstockShape.lineTo(0.15, 0.0);
+            headstockShape.lineTo(0.0, -0.24);
             const headstock = new THREE.Mesh(
-                new THREE.BoxGeometry(0.8, 0.4, 0.15),
-                new THREE.MeshStandardMaterial({ color: 0x8b4513 })
+                new THREE.ExtrudeGeometry(headstockShape, {
+                    depth: 0.14,
+                    bevelEnabled: true,
+                    bevelThickness: 0.01,
+                    bevelSize: 0.01,
+                    bevelSegments: 1,
+                    curveSegments: 10
+                }),
+                new THREE.MeshStandardMaterial({ color: 0x7a3c17, roughness: 0.45 })
             );
-            headstock.geometry.translate(0.4, 0, 0); 
-            headstock.position.set(FIXED_NECK_LENGTH, 0, 0); 
+            headstock.position.set(FIXED_NECK_LENGTH, 0, -0.07); 
             
             const pegMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.8 });
             for(let i=0; i<3; i++) {
@@ -500,20 +1059,20 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
             acousticNeckAnchor.add(headstock);
 
             const stringMat = new THREE.MeshBasicMaterial({ color: 0xeeeeee });
-            for(let i=0; i<5; i++) {
+            for(let i=0; i<6; i++) {
                 const stringGeom = new THREE.BoxGeometry(FIXED_NECK_LENGTH, 0.01, 0.01);
                 stringGeom.translate(FIXED_NECK_LENGTH / 2, 0, 0.12);
                 const stringMesh = new THREE.Mesh(stringGeom, stringMat);
-                stringMesh.position.y = (i - 2) * 0.05;
+                stringMesh.position.y = (i - 2.5) * VISUAL_STRING_SPACING;
                 acousticNeckAnchor.add(stringMesh);
             }
             fallbackGuitar.add(acousticNeckAnchor);
 
-            for(let i=0; i<5; i++) {
-                const bStrGeom = new THREE.BoxGeometry(1.5, 0.01, 0.01);
-                bStrGeom.translate(0.75, 0, 0);
+            for(let i=0; i<6; i++) {
+                const bStrGeom = new THREE.BoxGeometry(2.35, 0.01, 0.01);
+                bStrGeom.translate(1.175, 0, 0);
                 const bStrMesh = new THREE.Mesh(bStrGeom, stringMat);
-                bStrMesh.position.set(-0.9, (i - 2) * 0.05, 0.28);
+                bStrMesh.position.set(-1.72, (i - 2.5) * VISUAL_STRING_SPACING, 0.28);
                 fallbackGuitar.add(bStrMesh);
             }
             applyVintageGuitarShader(fallbackGuitar, 0xe7d9c8);
@@ -589,7 +1148,7 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
             const headstockMesh = new THREE.Mesh(headstockGeom, wingMat);
             headstockMesh.position.set(FIXED_NECK_LENGTH, 0, 0);
             
-            for(let i=0; i<5; i++) {
+            for(let i=0; i<6; i++) {
                 const peg = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.15), pegMat);
                 peg.position.set(FIXED_NECK_LENGTH + 0.2 + i*0.12, 0.15, 0.05);
                 rockNeckAnchor.add(peg);
@@ -598,14 +1157,14 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
                     new THREE.BoxGeometry(FIXED_NECK_LENGTH, 0.01, 0.01).translate(FIXED_NECK_LENGTH / 2, 0, 0.12), 
                     stringMat
                 );
-                stringMesh.position.y = (i - 2) * 0.05;
+                stringMesh.position.y = (i - 2.5) * VISUAL_STRING_SPACING;
                 rockNeckAnchor.add(stringMesh);
                 
                 const bStrMesh = new THREE.Mesh(
                     new THREE.BoxGeometry(1.1, 0.01, 0.01).translate(0.55, 0, 0), 
                     stringMat
                 );
-                bStrMesh.position.set(-0.9, (i - 2) * 0.05, 0.54);
+                bStrMesh.position.set(-0.9, (i - 2.5) * VISUAL_STRING_SPACING, 0.54);
                 rockGuitar.add(bStrMesh);
             }
             rockNeckAnchor.add(headstockMesh);
@@ -614,6 +1173,153 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
             rockGuitar.visible = false; 
             applyVintageGuitarShader(rockGuitar, 0xe4ccd0);
             guitarGroup.add(rockGuitar);
+
+            // --- 4. Reverse-V Guitar (point toward handle) ---
+            reverseVGuitar = new THREE.Group();
+            const reverseWingMat = new THREE.MeshPhysicalMaterial({ color: 0xd946ef, roughness: 0.18, metalness: 0.82 });
+            const reverseWingGeom = new THREE.BoxGeometry(3.2, 0.46, 0.86);
+            const reverseWingUpper = new THREE.Mesh(reverseWingGeom, reverseWingMat);
+            reverseWingUpper.position.set(-0.2, 0.72, 0);
+            reverseWingUpper.rotation.z = -0.5;
+            const reverseWingLower = new THREE.Mesh(reverseWingGeom, reverseWingMat);
+            reverseWingLower.position.set(-0.2, -0.72, 0);
+            reverseWingLower.rotation.z = 0.5;
+            const reverseCenter = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.96, 0.86), reverseWingMat);
+            reverseCenter.position.set(-0.75, 0, 0);
+            reverseVGuitar.add(reverseWingUpper);
+            reverseVGuitar.add(reverseWingLower);
+            reverseVGuitar.add(reverseCenter);
+
+            const reversePickupMat = new THREE.MeshStandardMaterial({ color: 0x181818 });
+            const reversePickupA = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.62, 0.1), reversePickupMat);
+            reversePickupA.position.set(-0.45, 0.0, 0.46);
+            const reversePickupB = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.62, 0.1), reversePickupMat);
+            reversePickupB.position.set(-0.85, 0.0, 0.46);
+            reverseVGuitar.add(reversePickupA);
+            reverseVGuitar.add(reversePickupB);
+            const reverseBridge = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.85, 0.14), metalFretMat);
+            reverseBridge.position.set(-1.2, 0, 0.46);
+            reverseVGuitar.add(reverseBridge);
+
+            reverseVNeckAnchor = new THREE.Group();
+            reverseVNeckAnchor.position.set(0.26, 0, 0);
+            const reverseNeck = new THREE.Mesh(
+                new THREE.BoxGeometry(FIXED_NECK_LENGTH, 0.24, 0.15).translate(FIXED_NECK_LENGTH / 2, 0, 0),
+                new THREE.MeshStandardMaterial({ color: 0x191919 })
+            );
+            reverseVNeckAnchor.add(reverseNeck);
+            const reverseFretboard = new THREE.Mesh(
+                new THREE.BoxGeometry(FIXED_NECK_LENGTH, 0.27, 0.05).translate(FIXED_NECK_LENGTH / 2, 0, 0.08),
+                new THREE.MeshStandardMaterial({ color: 0x2a2a2a })
+            );
+            reverseVNeckAnchor.add(reverseFretboard);
+            for (let i = 1; i <= 14; i++) {
+                const fret = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.28, 0.02), metalFretMat);
+                fret.position.set(i * (FIXED_NECK_LENGTH / 15), 0, 0.11);
+                reverseVNeckAnchor.add(fret);
+            }
+            const reverseHeadGeom = new THREE.CylinderGeometry(0.01, 0.28, 0.78, 3);
+            reverseHeadGeom.rotateZ(-Math.PI / 2);
+            reverseHeadGeom.translate(0.39, 0, 0);
+            const reverseHead = new THREE.Mesh(reverseHeadGeom, reverseWingMat);
+            reverseHead.position.set(FIXED_NECK_LENGTH, 0, 0);
+            reverseVNeckAnchor.add(reverseHead);
+            for (let i = 0; i < 6; i++) {
+                const peg = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.14), pegMat);
+                peg.position.set(FIXED_NECK_LENGTH + 0.2 + i * 0.11, 0.14, 0.05);
+                reverseVNeckAnchor.add(peg);
+                const neckStr = new THREE.Mesh(
+                    new THREE.BoxGeometry(FIXED_NECK_LENGTH, 0.01, 0.01).translate(FIXED_NECK_LENGTH / 2, 0, 0.12),
+                    stringMat
+                );
+                neckStr.position.y = (i - 2.5) * VISUAL_STRING_SPACING;
+                reverseVNeckAnchor.add(neckStr);
+                const bodyStr = new THREE.Mesh(
+                    new THREE.BoxGeometry(1.35, 0.01, 0.01).translate(0.675, 0, 0),
+                    stringMat
+                );
+                bodyStr.position.set(-1.22, (i - 2.5) * VISUAL_STRING_SPACING, 0.54);
+                reverseVGuitar.add(bodyStr);
+            }
+            reverseVGuitar.add(reverseVNeckAnchor);
+            reverseVGuitar.visible = false;
+            applyVintageGuitarShader(reverseVGuitar, 0xf0c5f6);
+            guitarGroup.add(reverseVGuitar);
+
+            // --- 5. Bass Guitar (4-string) ---
+            bassGuitar = new THREE.Group();
+
+            const bassBodyMat = new THREE.MeshPhysicalMaterial({ color: 0x1f2937, roughness: 0.28, metalness: 0.45 });
+            const bassBody = new THREE.Mesh(new THREE.BoxGeometry(2.8, 1.2, 0.65), bassBodyMat);
+            bassBody.position.set(-0.75, 0, 0);
+            bassGuitar.add(bassBody);
+
+            const bassPickupMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+            const bassPickupA = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.62, 0.08), bassPickupMat);
+            bassPickupA.position.set(-0.35, 0.1, 0.36);
+            const bassPickupB = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.62, 0.08), bassPickupMat);
+            bassPickupB.position.set(-0.65, 0.1, 0.36);
+            bassGuitar.add(bassPickupA);
+            bassGuitar.add(bassPickupB);
+
+            const bassBridge = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.7, 0.12), metalFretMat);
+            bassBridge.position.set(-1.0, 0, 0.35);
+            bassGuitar.add(bassBridge);
+
+            bassNeckAnchor = new THREE.Group();
+            bassNeckAnchor.position.set(0.35, 0, 0);
+            const bassNeckLen = FIXED_NECK_LENGTH * 1.12;
+            const bassNeck = new THREE.Mesh(
+                new THREE.BoxGeometry(bassNeckLen, 0.28, 0.14).translate(bassNeckLen / 2, 0, 0),
+                new THREE.MeshStandardMaterial({ color: 0x6b4f36 })
+            );
+            bassNeckAnchor.add(bassNeck);
+
+            const bassFretboard = new THREE.Mesh(
+                new THREE.BoxGeometry(bassNeckLen, 0.31, 0.05).translate(bassNeckLen / 2, 0, 0.08),
+                new THREE.MeshStandardMaterial({ color: 0x171717 })
+            );
+            bassNeckAnchor.add(bassFretboard);
+
+            for(let i=1; i<=12; i++) {
+                const bassFret = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.32, 0.02), metalFretMat);
+                bassFret.position.set(i * (bassNeckLen / 13), 0, 0.11);
+                bassNeckAnchor.add(bassFret);
+            }
+
+            const bassHead = new THREE.Mesh(
+                new THREE.BoxGeometry(1.0, 0.5, 0.14).translate(0.5, 0, 0),
+                new THREE.MeshStandardMaterial({ color: 0x2b1a12 })
+            );
+            bassHead.position.set(bassNeckLen, 0, 0);
+            bassNeckAnchor.add(bassHead);
+
+            const bassStringSpacing = BASS_VISUAL_STRING_SPACING;
+            for (let i = 0; i < 4; i++) {
+                const y = (i - 1.5) * bassStringSpacing;
+                const peg = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.18), pegMat);
+                peg.position.set(bassNeckLen + 0.22 + i * 0.16, 0.18, 0.05);
+                bassNeckAnchor.add(peg);
+
+                const bassStringNeck = new THREE.Mesh(
+                    new THREE.BoxGeometry(bassNeckLen, 0.012, 0.012).translate(bassNeckLen / 2, 0, 0.12),
+                    stringMat
+                );
+                bassStringNeck.position.y = y;
+                bassNeckAnchor.add(bassStringNeck);
+
+                const bassStringBody = new THREE.Mesh(
+                    new THREE.BoxGeometry(1.45, 0.012, 0.012).translate(0.725, 0, 0),
+                    stringMat
+                );
+                bassStringBody.position.set(-1.0, y, 0.36);
+                bassGuitar.add(bassStringBody);
+            }
+
+            bassGuitar.add(bassNeckAnchor);
+            bassGuitar.visible = false;
+            applyVintageGuitarShader(bassGuitar, 0xcdd8e6);
+            guitarGroup.add(bassGuitar);
 
             guitarGroup.add(chordSprite);
 
@@ -638,7 +1344,7 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
                 guitarGroup.rotation.z = lastNeckAngleZ; 
                 guitarGroup.rotation.y = lastNeckAngleY;
                 
-                const FIXED_NECK_LENGTH = 3.5;
+                const FIXED_NECK_LENGTH = BASE_NECK_LENGTH;
                 if (acousticNeckAnchor) {
                     const stretch = Math.max(0.6, Math.min(1.7, desiredNeckLength / FIXED_NECK_LENGTH));
                     acousticNeckAnchor.scale.x = stretch;
@@ -646,6 +1352,14 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
                 if (rockNeckAnchor) {
                     const stretch = Math.max(0.6, Math.min(1.7, desiredNeckLength / FIXED_NECK_LENGTH));
                     rockNeckAnchor.scale.x = stretch;
+                }
+                if (reverseVNeckAnchor) {
+                    const stretch = Math.max(0.6, Math.min(1.7, desiredNeckLength / FIXED_NECK_LENGTH));
+                    reverseVNeckAnchor.scale.x = stretch;
+                }
+                if (bassNeckAnchor) {
+                    const stretch = Math.max(0.6, Math.min(1.7, desiredNeckLength / FIXED_NECK_LENGTH));
+                    bassNeckAnchor.scale.x = stretch;
                 }
             }
 
@@ -681,7 +1395,7 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
             chordCtx.textAlign = 'center';
             chordCtx.textBaseline = 'middle';
             
-            chordCtx.shadowColor = isRockMode ? '#cc0000' : '#000000';
+            chordCtx.shadowColor = isBassMode ? '#3b82f6' : (isReverseVMode ? '#d946ef' : (isRockMode ? '#cc0000' : '#000000'));
             chordCtx.shadowBlur = 10;
             chordCtx.fillText(chordName, 128, 64);
             chordCtx.restore();
@@ -699,18 +1413,19 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
 
             const currentBridge = bodyAnchor.x !== null ? bodyAnchor : { x: 0.5, y: 0.6, z: 0 };
 
-            if (results.multiHandLandmarks && results.multiHandLandmarks.length >= 2) {
-                let fretHandMarks, strumHandMarks;
-                if (results.multiHandLandmarks[0][9].x < results.multiHandLandmarks[1][9].x) {
-                    fretHandMarks = results.multiHandLandmarks[1]; 
-                    strumHandMarks = results.multiHandLandmarks[0]; 
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length >= 1) {
+                let fretHandMarks;
+                if (results.multiHandLandmarks.length >= 2) {
+                    if (results.multiHandLandmarks[0][9].x < results.multiHandLandmarks[1][9].x) {
+                        fretHandMarks = results.multiHandLandmarks[1];
+                    } else {
+                        fretHandMarks = results.multiHandLandmarks[0];
+                    }
                 } else {
                     fretHandMarks = results.multiHandLandmarks[0];
-                    strumHandMarks = results.multiHandLandmarks[1];
                 }
 
-                let strumHand = strumHandMarks[9];
-                let fretHand = fretHandMarks[9];
+                const fretHand = fretHandMarks[9];
 
                 const projectedBridge = projectVideoPoint(currentBridge.x, currentBridge.y);
                 const projectedFret = projectVideoPoint(fretHand.x, fretHand.y);
@@ -721,61 +1436,140 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
                 const dy = projectedFret.ny - projectedBridge.ny;
                 const distance = Math.sqrt(dx * dx + dy * dy);
 
-                const minDist = 0.1;
-                const maxDist = 0.6;
+                const minDist = CHORD_SELECT_MIN_DIST;
+                const maxDist = CHORD_SELECT_MAX_DIST;
                 let normalizedDist = (distance - minDist) / (maxDist - minDist);
                 normalizedDist = Math.max(0, Math.min(1, normalizedDist)); 
 
-                activeChordIndex = Math.floor(normalizedDist * (CHORDS.length - 0.01)); 
+                // Longer guitar span -> deeper/low chord. Shorter span -> brighter/high chord.
+                const inverseDist = 1 - normalizedDist;
+                const curvedSelect = Math.pow(inverseDist, CHORD_SELECT_CURVE);
+                const handSelectedIndex = Math.max(0, Math.min(CHORDS.length - 1, Math.round(curvedSelect * (CHORDS.length - 1))));
+                lastHandSelectedIndex = handSelectedIndex;
+                if (Date.now() >= shuffleLockUntil) {
+                    activeChordIndex = handSelectedIndex;
+                }
                 const currentChord = CHORDS[activeChordIndex];
+                const stringCount = currentChord.notes.length;
+                ensureStringTrackingSize(stringCount);
                 
                 updateChordText(currentChord.name);
 
-                const fingers = [{ tip: 4 }, { tip: 8 }, { tip: 12 }, { tip: 16 }, { tip: 20 }];
-
                 let pluckedThisFrame = false;
-                const L2 = Math.pow(pFret.x - pBridge.x, 2) + Math.pow(pFret.y - pBridge.y, 2);
-                const tipPoints = [null, null, null, null, null];
+                const minDim = Math.min(canvasElement.width, canvasElement.height);
+                const lineVec = { x: pFret.x - pBridge.x, y: pFret.y - pBridge.y };
+                const lineLen = Math.max(1e-6, Math.hypot(lineVec.x, lineVec.y));
+                const lineDir = { x: lineVec.x / lineLen, y: lineVec.y / lineLen };
+                let lineNormal = { x: -lineDir.y, y: lineDir.x };
+                if (lineNormal.y < 0) {
+                    lineNormal = { x: -lineNormal.x, y: -lineNormal.y };
+                }
+                const stringYOffset = minDim * 0.028;
+                const stringLeftOffset = minDim * 0.014;
+                const strumStart = {
+                    x: pBridge.x + (lineDir.x * lineLen * 0.08) + (lineNormal.x * stringYOffset) - stringLeftOffset,
+                    y: pBridge.y + (lineDir.y * lineLen * 0.08) + (lineNormal.y * stringYOffset)
+                };
+                const strumEnd = {
+                    x: pFret.x - (lineDir.x * lineLen * 0.06) + (lineNormal.x * stringYOffset) - stringLeftOffset,
+                    y: pFret.y - (lineDir.y * lineLen * 0.06) + (lineNormal.y * stringYOffset)
+                };
+                const spacingFactor = isBassMode ? BASS_TRACK_SPACING_FACTOR : STRING_TRACK_SPACING_FACTOR;
+                const stringSpacing = minDim * spacingFactor;
+                const centerIdx = (stringCount - 1) / 2;
+                const stringLines = new Array(stringCount).fill(null).map((_, idx) => {
+                    const offset = (idx - centerIdx) * stringSpacing;
+                    return {
+                        start: {
+                            x: strumStart.x + (lineNormal.x * offset),
+                            y: strumStart.y + (lineNormal.y * offset)
+                        },
+                        end: {
+                            x: strumEnd.x + (lineNormal.x * offset),
+                            y: strumEnd.y + (lineNormal.y * offset)
+                        }
+                    };
+                });
 
-                fingers.forEach((finger, idx) => {
-                    const tip = strumHandMarks[finger.tip];
-                    const projectedTip = projectVideoPoint(tip.x, tip.y);
-                    const pTip = { x: projectedTip.x, y: projectedTip.y };
-                    tipPoints[idx] = pTip;
-                    
-                    let dist = 0;
-                    if (L2 === 0) {
-                        dist = Math.hypot(pTip.x - pBridge.x, pTip.y - pBridge.y);
-                    } else {
-                        const t = Math.max(0, Math.min(1, ((pTip.x - pBridge.x) * (pFret.x - pBridge.x) + (pTip.y - pBridge.y) * (pFret.y - pBridge.y)) / L2));
-                        const projX = pBridge.x + t * (pFret.x - pBridge.x);
-                        const projY = pBridge.y + t * (pFret.y - pBridge.y);
-                        dist = Math.hypot(pTip.x - projX, pTip.y - projY);
+                if (SHOW_STRUM_GUIDE_LINE) {
+                    canvasCtx.lineWidth = 2;
+                    for (let i = 0; i < stringLines.length; i++) {
+                        canvasCtx.beginPath();
+                        canvasCtx.moveTo(stringLines[i].start.x, stringLines[i].start.y);
+                        canvasCtx.lineTo(stringLines[i].end.x, stringLines[i].end.y);
+                        canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+                        canvasCtx.stroke();
                     }
+                }
 
-                    const minDim = Math.min(canvasElement.width, canvasElement.height);
-                    const TOUCH_THRESHOLD = minDim * 0.04;
-                    const RELEASE_THRESHOLD = minDim * 0.07;
-                    
-                    let isTouching = fingerStates[idx];
-                    
-                    if (!isTouching && dist < TOUCH_THRESHOLD) {
-                        isTouching = true; 
-                    } else if (isTouching && dist > RELEASE_THRESHOLD) {
-                        isTouching = false; 
-                    }
+                const poseStrumWrist = latestPoseLandmarks ? latestPoseLandmarks[16] : null;
+                const poseStrumIndex = latestPoseLandmarks ? latestPoseLandmarks[20] : null;
+                const poseStrumPinky = latestPoseLandmarks ? latestPoseLandmarks[18] : null;
+                const poseStrumVisible = !!poseStrumWrist && (poseStrumWrist.visibility == null || poseStrumWrist.visibility > 0.35);
 
-                    if (isTouching && !fingerStates[idx]) {
-                        const now = Date.now();
-                        if (now - fingerLastPluckTime[idx] > 100) { 
-                            playNote(currentChord.notes[4 - idx]);
-                            fingerLastPluckTime[idx] = now;
-                            fingerHitVisualUntil[idx] = now + FINGER_HIT_MS;
+                if (poseStrumVisible) {
+                    const anchorX = (
+                        (poseStrumWrist.x * 0.55) +
+                        ((poseStrumIndex ? poseStrumIndex.x : poseStrumWrist.x) * 0.25) +
+                        ((poseStrumPinky ? poseStrumPinky.x : poseStrumWrist.x) * 0.2)
+                    );
+                    const anchorY = (
+                        (poseStrumWrist.y * 0.55) +
+                        ((poseStrumIndex ? poseStrumIndex.y : poseStrumWrist.y) * 0.25) +
+                        ((poseStrumPinky ? poseStrumPinky.y : poseStrumWrist.y) * 0.2)
+                    );
+                    const projectedWrist = projectVideoPoint(anchorX, anchorY);
+                    // Positive factor means "visual left"; mirrored rendering needs opposite screen-space sign.
+                    const screenXOffset = minDim * STRUM_POINT_LEFT_FACTOR * (IS_RENDER_MIRRORED ? 1 : -1);
+                    const pStrum = {
+                        x: projectedWrist.x + screenXOffset,
+                        y: projectedWrist.y + (minDim * STRUM_POINT_DOWN_FACTOR)
+                    };
+                    const now = Date.now();
+                    let activeStringCount = 0;
+                    const sideDeadzone = minDim * STRING_SIDE_DEADZONE_FACTOR;
+                    for (let i = 0; i < stringLines.length; i++) {
+                        const metrics = pointToSegmentMetrics(pStrum, stringLines[i].start, stringLines[i].end);
+                        const inPlayableSpan = metrics.t > -0.28 && metrics.t < 1.28;
+                        if (!inPlayableSpan) {
+                            prevStringSides[i] = null;
+                            continue;
+                        }
+                        const signedDist = metrics.side / lineLen;
+                        let currentSide = 0;
+                        if (signedDist > sideDeadzone) currentSide = 1;
+                        else if (signedDist < -sideDeadzone) currentSide = -1;
+                        if (currentSide === 0) continue;
+
+                        activeStringCount++;
+                        const prevSide = prevStringSides[i];
+                        const crossedLine = prevSide !== null && currentSide !== prevSide;
+                        if (crossedLine && (now - lastStringHitTimes[i] > STRING_NOTE_DEBOUNCE_MS)) {
+                            playNote(currentChord.notes[i]);
+                            lastStringHitTimes[i] = now;
+                            lastPluckedStringIndex = i;
                             pluckedThisFrame = true;
                         }
+                        prevStringSides[i] = currentSide;
                     }
-                    fingerStates[idx] = isTouching;
-                });
+
+                    // Show the strum dot only when hand is on playable string lanes.
+                    // Keep the last played note color; do not auto-return to yellow.
+                    if (activeStringCount > 0) {
+                        const noteColor = (lastPluckedStringIndex >= 0)
+                            ? NOTE_COLORS[lastPluckedStringIndex % NOTE_COLORS.length]
+                            : '#ffd43b';
+                        canvasCtx.beginPath();
+                        canvasCtx.arc(pStrum.x, pStrum.y, 10, 0, 2 * Math.PI);
+                        canvasCtx.fillStyle = noteColor;
+                        canvasCtx.fill();
+                        canvasCtx.lineWidth = 2;
+                        canvasCtx.strokeStyle = '#ffffff';
+                        canvasCtx.stroke();
+                    }
+                } else {
+                    prevStringSides.fill(null);
+                }
 
                 if (pluckedThisFrame) {
                     isStrummingVisual = true;
@@ -790,33 +1584,22 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
                 const dy3D = fret3D.y - bridge3D.y;
                 const dz3D = fret3D.z - bridge3D.z;
 
-                lastNeckAngleZ = Math.atan2(dy3D, dx3D); 
-                lastNeckAngleY = Math.atan2(-dz3D, Math.hypot(dx3D, dy3D)); 
-                
                 const dist3D = Math.hypot(dx3D, dy3D);
                 const localDist = dist3D / Math.max(0.1, bodyScale);
-                desiredNeckLength = (localDist - (acousticNeckAnchor ? acousticNeckAnchor.position.x : 0.6)) + 2.0;
-
-                const now = Date.now();
-                const drawPoint = (point, color, radius = 8) => {
-                    if (!point) return;
-                    canvasCtx.beginPath();
-                    canvasCtx.arc(point.x, point.y, radius, 0, 2 * Math.PI);
-                    canvasCtx.fillStyle = color;
-                    canvasCtx.fill();
-                    canvasCtx.lineWidth = 2;
-                    canvasCtx.strokeStyle = '#ffffff';
-                    canvasCtx.stroke();
-                };
-                for (let i = 0; i < tipPoints.length; i++) {
-                    if (now < fingerHitVisualUntil[i]) {
-                        drawPoint(tipPoints[i], FINGER_HIT_COLORS[i], 9);
-                    }
+                if (localDist > NECK_ROTATION_DEADZONE_LOCAL) {
+                    const targetAngleZ = Math.atan2(dy3D, dx3D);
+                    const targetAngleY = Math.atan2(-dz3D, Math.hypot(dx3D, dy3D));
+                    lastNeckAngleZ = (lastNeckAngleZ * (1 - NECK_ANGLE_LERP)) + (targetAngleZ * NECK_ANGLE_LERP);
+                    lastNeckAngleY = (lastNeckAngleY * (1 - NECK_ANGLE_LERP)) + (targetAngleY * NECK_ANGLE_LERP);
                 }
 
+                const neckAnchorOffset = acousticNeckAnchor ? acousticNeckAnchor.position.x : 0.6;
+                const targetNeckLength = (localDist - neckAnchorOffset) + 2.55;
+                const clampedTargetLength = Math.max(MIN_DESIRED_NECK_LENGTH, Math.min(targetNeckLength, MAX_DESIRED_NECK_LENGTH));
+                desiredNeckLength = (desiredNeckLength * (1 - NECK_LENGTH_LERP)) + (clampedTargetLength * NECK_LENGTH_LERP);
+
             } else {
-                fingerStates = [false, false, false, false, false]; 
-                fingerHitVisualUntil = [0, 0, 0, 0, 0];
+                prevStringSides.fill(null);
             }
 
             canvasCtx.restore();
@@ -848,6 +1631,7 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
 
         pose.onResults((results) => {
             syncCanvases(); 
+            latestPoseLandmarks = results.poseLandmarks || null;
             if (results.poseLandmarks) {
                 if (guitarGroup) guitarGroup.visible = true;
                 clearTimeout(bodyLostTimer);
@@ -885,7 +1669,32 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
                     bodyScale = bodyScale * (1 - SCALE_LERP) + targetScale * SCALE_LERP;
                 }
 
+                // Knee gestures switch famous pop chord sets:
+                // right knee up -> next set, left knee up -> previous set.
+                const lHip = results.poseLandmarks[23];
+                const rHip = results.poseLandmarks[24];
+                const lKnee = results.poseLandmarks[25];
+                const rKnee = results.poseLandmarks[26];
+                const leftVisible = lHip && lKnee && (lKnee.visibility == null || lKnee.visibility > 0.35);
+                const rightVisible = rHip && rKnee && (rKnee.visibility == null || rKnee.visibility > 0.35);
+                const leftRaised = !!leftVisible && (lKnee.y < (lHip.y - KNEE_RAISE_THRESHOLD));
+                const rightRaised = !!rightVisible && (rKnee.y < (rHip.y - KNEE_RAISE_THRESHOLD));
+
+                const rightRisingEdge = rightRaised && !prevRightKneeRaised;
+                const leftRisingEdge = leftRaised && !prevLeftKneeRaised;
+                if (rightRisingEdge && !leftRisingEdge) {
+                    stepChordSequence(1);
+                } else if (leftRisingEdge && !rightRisingEdge) {
+                    stepChordSequence(-1);
+                }
+
+                prevRightKneeRaised = rightRaised;
+                prevLeftKneeRaised = leftRaised;
+
             } else {
+                latestPoseLandmarks = null;
+                prevRightKneeRaised = false;
+                prevLeftKneeRaised = false;
                 if (!bodyLostTimer) {
                     bodyLostTimer = setTimeout(() => {
                         if (guitarGroup) guitarGroup.visible = false; 
@@ -897,8 +1706,10 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
         startBtn.addEventListener('click', () => {
             initAudio(); 
             initThreeJS(); 
+            applyInstrumentMode('acoustic');
             startScreen.style.display = 'none';
             document.getElementById('toggle-mode-btn').classList.remove('hidden');
+            document.getElementById('shuffle-btn').classList.remove('hidden');
 
             hardenInlineVideo(videoElement);
 
@@ -921,20 +1732,22 @@ gl_FragColor.rgb = clamp(graded + grain, 0.0, 1.0);
 
         const toggleModeBtn = document.getElementById('toggle-mode-btn');
         toggleModeBtn.addEventListener('click', () => {
-            isRockMode = !isRockMode;
-            
-            if (isRockMode) {
-                toggleModeBtn.innerText = "⚡"; 
-            } else {
-                toggleModeBtn.innerText = "🎸"; 
-            }
-            
-            lastChordName = ""; 
-            updateChordText(CHORDS[activeChordIndex].name);
+            let nextMode = 'acoustic';
+            if (!isRockMode && !isBassMode && !isReverseVMode) nextMode = 'rock';
+            else if (isRockMode) nextMode = 'reversev';
+            else if (isReverseVMode) nextMode = 'bass';
+            else nextMode = 'acoustic';
 
-            
-            if (fallbackGuitar) fallbackGuitar.visible = !isRockMode;
-            if (rockGuitar) rockGuitar.visible = isRockMode;
+            applyInstrumentMode(nextMode);
+            if (isReverseVMode) toggleModeBtn.innerText = "💜";
+            else if (isBassMode) toggleModeBtn.innerText = "🎵";
+            else if (isRockMode) toggleModeBtn.innerText = "⚡";
+            else toggleModeBtn.innerText = "🎸";
+        });
+
+        const shuffleBtn = document.getElementById('shuffle-btn');
+        shuffleBtn.addEventListener('click', () => {
+            shuffleChordFromSelection();
         });
 
     </script>
